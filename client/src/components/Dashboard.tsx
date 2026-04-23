@@ -1,0 +1,231 @@
+import React from 'react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useAuction } from '@/contexts/AuctionContext';
+import { useWeb3 } from '@/contexts/Web3Context';
+import { useAuctionDetails } from '@/hooks/useAuctionDetails';
+import { useAuctionActions } from '@/hooks/useAuctionActions';
+import { formatEthShort, shortAddr } from '@/utils/formatters';
+import { Gavel, TrendingUp, Trophy, RefreshCw } from 'lucide-react';
+
+interface DashboardProps {
+  onAuctionSelect: (auctionId: string) => void;
+}
+
+export function Dashboard({ onAuctionSelect }: DashboardProps) {
+  const { auctions } = useAuction();
+  const { address, isConnected } = useWeb3();
+
+  const normalizedAddress = address?.toLowerCase();
+  const myAuctions = auctions.filter((auction) => auction.creator.toLowerCase() === normalizedAddress);
+  const myLeadingBids = auctions.filter((auction) => auction.highestBidder?.toLowerCase() === normalizedAddress);
+  const watchedAuctions = auctions.filter(
+    (auction) => auction.highestBidder?.toLowerCase() !== normalizedAddress && auction.creator.toLowerCase() !== normalizedAddress
+  );
+
+  return (
+    <section id="dashboard" className="py-20 px-4 bg-black">
+      <div className="max-w-7xl mx-auto">
+        <h1 className="text-4xl font-heading italic text-white mb-4">My Dashboard</h1>
+        <p className="text-white/60 font-body mb-12 max-w-2xl">
+          Monitor your live auctions, manage seller actions, and withdraw any funds available to your connected wallet.
+        </p>
+
+        {!isConnected ? (
+          <div
+            className="p-8 rounded-xl text-center"
+            style={{
+              background: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+            }}
+          >
+            <p className="text-white/60 font-body">Connect your wallet to access seller and bidder controls.</p>
+          </div>
+        ) : (
+          <Tabs defaultValue="auctions" className="w-full">
+            <TabsList
+              className="grid w-full grid-cols-3 mb-8"
+              style={{
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+              }}
+            >
+              <TabsTrigger value="auctions">My Auctions</TabsTrigger>
+              <TabsTrigger value="bids">Leading Bids</TabsTrigger>
+              <TabsTrigger value="watch">Watchlist</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="auctions">
+              <div className="space-y-4">
+                {myAuctions.length > 0 ? (
+                  myAuctions.map((auction) => (
+                    <AuctionActionRow
+                      key={auction.id}
+                      auctionId={auction.id}
+                      title={auction.title}
+                      image={auction.image}
+                      subtitle={`Current bid: ${auction.currentBid.toFixed(4)} ETH`}
+                      onOpen={() => onAuctionSelect(auction.id)}
+                      mode="seller"
+                    />
+                  ))
+                ) : (
+                  <EmptyState icon={Gavel} message="No auctions created yet" />
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="bids">
+              <div className="space-y-4">
+                {myLeadingBids.length > 0 ? (
+                  myLeadingBids.map((auction) => (
+                    <AuctionActionRow
+                      key={auction.id}
+                      auctionId={auction.id}
+                      title={auction.title}
+                      image={auction.image}
+                      subtitle={`You are leading at ${auction.currentBid.toFixed(4)} ETH`}
+                      onOpen={() => onAuctionSelect(auction.id)}
+                      mode="bidder"
+                    />
+                  ))
+                ) : (
+                  <EmptyState icon={TrendingUp} message="No auctions where you are the highest bidder yet" />
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="watch">
+              <div className="space-y-4">
+                {watchedAuctions.slice(0, 6).length > 0 ? (
+                  watchedAuctions.slice(0, 6).map((auction) => (
+                    <AuctionActionRow
+                      key={auction.id}
+                      auctionId={auction.id}
+                      title={auction.title}
+                      image={auction.image}
+                      subtitle={`Seller: ${shortAddr(auction.creator)}`}
+                      onOpen={() => onAuctionSelect(auction.id)}
+                      mode="viewer"
+                    />
+                  ))
+                ) : (
+                  <EmptyState icon={Trophy} message="No other live auctions to watch right now" />
+                )}
+              </div>
+            </TabsContent>
+          </Tabs>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AuctionActionRow({
+  auctionId,
+  title,
+  image,
+  subtitle,
+  onOpen,
+  mode,
+}: {
+  auctionId: string;
+  title: string;
+  image: string;
+  subtitle: string;
+  onOpen: () => void;
+  mode: 'seller' | 'bidder' | 'viewer';
+}) {
+  const { auction } = useAuctionDetails(auctionId);
+  const { endAuction, withdrawBid, extendBySeller, isPending, error } = useAuctionActions(auctionId);
+
+  return (
+    <div
+      className="p-6 rounded-xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5"
+      style={{
+        background: 'rgba(255, 255, 255, 0.05)',
+        border: '1px solid rgba(255, 255, 255, 0.15)',
+      }}
+    >
+      <div className="flex items-center gap-4">
+        <img src={image} alt={title} className="w-16 h-16 rounded-lg object-cover bg-black" />
+        <div>
+          <h3 className="text-white font-heading italic text-lg">{title}</h3>
+          <p className="text-white/60 text-sm font-body">{subtitle}</p>
+          {auction && (
+            <p className="text-white/40 text-xs font-body mt-1">
+              Pending withdrawal: {formatEthShort(auction.pendingAmount)}
+            </p>
+          )}
+          {error && <p className="text-red-200 text-xs font-body mt-2">{error}</p>}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          onClick={onOpen}
+          className="px-4 py-2 rounded-lg text-sm font-medium text-black"
+          style={{ background: 'rgb(255, 255, 255)' }}
+        >
+          View
+        </button>
+
+        {mode === 'seller' && (
+          <>
+            <button
+              onClick={() => void endAuction()}
+              disabled={isPending || !auction || auction.status !== 'active' || auction.endTime > Date.now()}
+              className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+              style={{
+                background: 'rgba(255, 255, 255, 0.1)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+              }}
+            >
+              End
+            </button>
+            <button
+              onClick={() => void extendBySeller(3600)}
+              disabled={isPending || !auction || auction.status !== 'active'}
+              className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50 flex items-center gap-2"
+              style={{
+                background: 'rgba(255, 255, 255, 0.08)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+              }}
+            >
+              <RefreshCw className="w-4 h-4" />
+              Extend 1h
+            </button>
+          </>
+        )}
+
+        {(mode === 'seller' || mode === 'bidder') && (
+          <button
+            onClick={() => void withdrawBid()}
+            disabled={isPending || !auction || auction.pendingAmount <= 0n}
+            className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+            style={{
+              background: 'rgba(255, 255, 255, 0.08)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+            }}
+          >
+            Withdraw
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({
+  icon: Icon,
+  message,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  message: string;
+}) {
+  return (
+    <div className="text-center py-12">
+      <Icon className="w-12 h-12 text-white/20 mx-auto mb-4" />
+      <p className="text-white/60 font-body">{message}</p>
+    </div>
+  );
+}
