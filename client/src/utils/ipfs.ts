@@ -1,80 +1,69 @@
-import { keccak256, toBytes } from "viem";
+// src/utils/ipfs.js
+// ─────────────────────────────────────────────────────────────────────────────
+// All IPFS operations go through your Express backend (server.js).
+// The browser never calls Pinata directly — this keeps your API keys safe.
+// ─────────────────────────────────────────────────────────────────────────────
 
-const pinataJwt = import.meta.env.VITE_PINATA_JWT;
-const ipfsGateway = "https://gateway.pinata.cloud/ipfs/";
+import { BACKEND_URL } from "../config/contract";
 
-export interface AuctionMetadata {
-  name: string;
-  description: string;
-  condition?: string;
-  images: string[];
-}
-
-export function cidToBytes32(cid: string) {
-  return keccak256(toBytes(cid));
-}
-
-export async function uploadMetadata(metadata: AuctionMetadata) {
-  if (!pinataJwt) {
-    throw new Error("VITE_PINATA_JWT not set in .env");
-  }
-
-  const response = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${pinataJwt}`,
-    },
-    body: JSON.stringify({
-      pinataContent: metadata,
-      pinataMetadata: { name: `auction-${Date.now()}` },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Pinata upload failed: ${await response.text()}`);
-  }
-
-  const data = (await response.json()) as { IpfsHash: string };
-  return {
-    cid: data.IpfsHash,
-    cidBytes32: cidToBytes32(data.IpfsHash),
-  };
-}
-
-export async function uploadFile(file: File) {
-  if (!pinataJwt) {
-    throw new Error("VITE_PINATA_JWT not set in .env");
-  }
-
+/**
+ * Upload image + metadata to IPFS via your Express backend.
+ * Calls POST /create-auction on your server which handles Pinata.
+ *
+ * @param {{
+ *   name: string,
+ *   description: string,
+ *   condition: string,
+ *   imageFile: File       ← browser File from <input type="file">
+ * }} params
+ *
+ * @returns {{ metadataCID: string, imageCID: string }}
+ *   metadataCID — pass this string directly to createAuction() on-chain
+ */
+export async function uploadAuctionToIPFS({ name, description, condition, imageFile }) {
   const formData = new FormData();
-  formData.append("file", file);
-  formData.append("pinataMetadata", JSON.stringify({ name: file.name }));
+  formData.append("image",       imageFile);
+  formData.append("name",        name);
+  formData.append("description", description);
+  formData.append("condition",   condition || "");
 
-  const response = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+  const res = await fetch(`${BACKEND_URL}/create-auction`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${pinataJwt}` },
-    body: formData,
+    body:   formData,
+    // Do NOT set Content-Type — browser sets it with the correct boundary
   });
 
-  if (!response.ok) {
-    throw new Error(`Pinata file upload failed: ${await response.text()}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Upload failed" }));
+    throw new Error(err.error || "IPFS upload failed");
   }
 
-  const data = (await response.json()) as { IpfsHash: string };
-  return data.IpfsHash;
+  return res.json(); // { metadataCID, imageCID }
 }
 
-export async function fetchMetadata(cid: string) {
-  const response = await fetch(`${ipfsGateway}${cid}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch metadata from IPFS: ${cid}`);
-  }
-  return (await response.json()) as AuctionMetadata;
+/**
+ * Fetch auction metadata from IPFS via your backend proxy.
+ * Avoids CORS issues when fetching from IPFS gateways in the browser.
+ *
+ * @param {string} cid  — e.g. "ipfs://QmXyz..."
+ * @returns {Object}  parsed metadata JSON
+ */
+export async function fetchMetadata(cid) {
+  if (!cid) return null;
+
+  const res = await fetch(`${BACKEND_URL}/metadata?cid=${encodeURIComponent(cid)}`);
+  if (!res.ok) throw new Error(`Failed to load metadata for ${cid}`);
+  return res.json();
 }
 
-export function ipfsImageUrl(cid: string) {
+/**
+ * Returns an <img src> URL for an IPFS image CID.
+ * Routes through your backend proxy to avoid CORS issues.
+ *
+ * @param {string} cid  — e.g. "ipfs://QmXyz..."
+ * @returns {string} URL
+ */
+export function ipfsImageUrl(cid) {
   if (!cid) return "";
-  if (cid.startsWith("http")) return cid;
-  return `${ipfsGateway}${cid}`;
+  return `${BACKEND_URL}/auction-image?cid=${encodeURIComponent(cid)}`;
 }
