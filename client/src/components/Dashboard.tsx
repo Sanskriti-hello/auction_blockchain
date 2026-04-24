@@ -1,9 +1,8 @@
 import React from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useAuction } from '@/contexts/AuctionContext';
+import { useAuction as useAuctionContext } from '@/contexts/AuctionContext';
 import { useWeb3 } from '@/contexts/Web3Context';
-import { useAuctionDetails } from '@/hooks/useAuctionDetails';
-import { useAuctionActions } from '@/hooks/useAuctionActions';
+import { useAuction, useEndAuction, useWithdrawBid, useExtendBySeller } from '@/hooks/UseAuction';
 import { formatEthShort, shortAddr } from '@/utils/formatters';
 import { Gavel, TrendingUp, Trophy, RefreshCw } from 'lucide-react';
 
@@ -12,7 +11,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ onAuctionSelect }: DashboardProps) {
-  const { auctions } = useAuction();
+  const { auctions } = useAuctionContext();
   const { address, isConnected } = useWeb3();
 
   const normalizedAddress = address?.toLowerCase();
@@ -135,8 +134,16 @@ function AuctionActionRow({
   onOpen: () => void;
   mode: 'seller' | 'bidder' | 'viewer';
 }) {
-  const { auction } = useAuctionDetails(auctionId);
-  const { endAuction, withdrawBid, extendBySeller, isPending, error } = useAuctionActions(auctionId);
+  const { deadline, ended, pendingAmount, isLoading } = useAuction(auctionId);
+  const { endAuction, isPending: isEndPending, error: endError } = useEndAuction();
+  const { withdrawBid, isPending: isWithdrawPending, error: withdrawError } = useWithdrawBid(auctionId);
+  const { extendBySeller, isPending: isExtendPending, error: extendError } = useExtendBySeller();
+
+  const isPending = isEndPending || isWithdrawPending || isExtendPending;
+  const error = endError || withdrawError || extendError;
+
+  const auctionStatus = ended ? 'ended' : 'active';
+  const auctionEndTime = Number(deadline) * 1000;
 
   return (
     <div
@@ -151,9 +158,9 @@ function AuctionActionRow({
         <div>
           <h3 className="text-white font-heading italic text-lg">{title}</h3>
           <p className="text-white/60 text-sm font-body">{subtitle}</p>
-          {auction && (
+          {!isLoading && (
             <p className="text-white/40 text-xs font-body mt-1">
-              Pending withdrawal: {formatEthShort(auction.pendingAmount)}
+              Pending withdrawal: {formatEthShort(pendingAmount)}
             </p>
           )}
           {error && <p className="text-red-200 text-xs font-body mt-2">{error}</p>}
@@ -172,8 +179,8 @@ function AuctionActionRow({
         {mode === 'seller' && (
           <>
             <button
-              onClick={() => void endAuction()}
-              disabled={isPending || !auction || auction.status !== 'active' || auction.endTime > Date.now()}
+              onClick={() => void endAuction(auctionId)}
+              disabled={isPending || isLoading || auctionStatus !== 'active' || auctionEndTime > Date.now()}
               className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
               style={{
                 background: 'rgba(255, 255, 255, 0.1)',
@@ -183,8 +190,8 @@ function AuctionActionRow({
               End
             </button>
             <button
-              onClick={() => void extendBySeller(3600)}
-              disabled={isPending || !auction || auction.status !== 'active'}
+              onClick={() => void extendBySeller(auctionId, 3600)}
+              disabled={isPending || isLoading || auctionStatus !== 'active'}
               className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50 flex items-center gap-2"
               style={{
                 background: 'rgba(255, 255, 255, 0.08)',
@@ -200,7 +207,7 @@ function AuctionActionRow({
         {(mode === 'seller' || mode === 'bidder') && (
           <button
             onClick={() => void withdrawBid()}
-            disabled={isPending || !auction || auction.pendingAmount <= 0n}
+            disabled={isPending || isLoading || (pendingAmount ?? 0n) <= 0n}
             className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
             style={{
               background: 'rgba(255, 255, 255, 0.08)',

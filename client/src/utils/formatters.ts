@@ -31,30 +31,30 @@ export function parseContractError(err) {
   const msg = err.message || err.toString();
 
   const map = {
-    "Seller not verified by admin": "Your seller account is not yet verified by the admin.",
-    "Seller has not paid registration fee": "You need to pay the registration fee first.",
-    "Already registered":      "You have already registered as a seller.",
-    "Insufficient registration fee": "Sent ETH is less than the registration fee.",
-    "Auction does not exist":  "This auction doesn't exist.",
-    "Auction has already ended": "This auction has closed.",
-    "Auction is already finalized": "This auction has been finalised.",
-    "Auction is still active": "The auction hasn't ended yet.",
-    "Auction already ended":   "Already ended.",
-    "Seller cannot bid":       "The seller cannot bid on their own auction.",
-    "Already highest bidder":  "You are already the highest bidder.",
-    "Bid below starting price": "Your bid is below the starting price.",
-    "Bid must be at least increment higher": "Your bid doesn't meet the minimum increment.",
-    "Must send more than the participation fee": "You must send more than just the fee.",
-    "Nothing to withdraw":     "You have nothing to withdraw.",
-    "Transfer failed":         "ETH transfer failed. Try again.",
-    "Only seller can extend":  "Only the seller can extend this auction.",
-    "Exceeds allowed extension": "Extension would exceed the 20% limit.",
-    "No fees to withdraw":     "No fees accumulated yet.",
-    "Not currently verified":  "Seller is not currently verified.",
+    SellerNotVerified:            "Your seller account is not yet verified by the admin.",
+    AlreadyRegistered:            "You have already registered as a seller.",
+    InsufficientRegistrationFee:  "Sent ETH is less than the registration fee.",
+    SellerNotPaidFee:             "Seller has not paid the registration fee.",
+    AuctionNotExist:              "This auction doesn't exist.",
+    AuctionAlreadyFinalized:      "This auction has been finalised.",
+    AuctionExpired:               "This auction has closed.",
+    AuctionNotYetEnded:           "The auction hasn't ended yet.",
+    SellerCannotBid:              "The seller cannot bid on their own auction.",
+    AlreadyHighestBidder:         "You are already the highest bidder.",
+    BidBelowStartingPrice:        "Your bid is below the starting price.",
+    BidTooLow:                    "Your bid doesn't meet the minimum increment.",
+    MustSendMoreThanFee:           "You must send more than just the fee.",
+    NothingToWithdraw:            "You have nothing to withdraw.",
+    ETHTransferFailed:            "ETH transfer failed. Try again.",
+    OnlySellerCanExtend:           "Only the seller can extend this auction.",
+    ExceedsMaxSellerExtension:    "Extension would exceed the 20% limit.",
+    NoFeesToWithdraw:             "No fees accumulated yet.",
+    NotCurrentlyVerified:         "Seller is not currently verified.",
+    NotOwner:                     "Not authorised.",
   };
 
-  for (const [solMsg, friendly] of Object.entries(map)) {
-    if (msg.includes(solMsg)) return friendly;
+  for (const [errorName, friendly] of Object.entries(map)) {
+    if (msg.includes(errorName)) return friendly;
   }
 
   if (msg.includes("User rejected") || msg.includes("user rejected")) return "Transaction cancelled.";

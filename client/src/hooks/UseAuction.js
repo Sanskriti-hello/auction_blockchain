@@ -16,7 +16,7 @@ import { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
 import { AUCTION_ABI, getContractAddress } from "../config/contract";
 import { fetchMetadata }        from "../utils/ipfs";
-import { parseContractError }   from "../utils/formatters";
+import { safeLog, safeError } from "../utils/safeStringify";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Internal shared helper — handles write + wait + error state
@@ -33,32 +33,106 @@ function useContractWrite() {
 
   const { writeContractAsync } = useWriteContract();
 
-  const { isLoading: isTxLoading } = useWaitForTransactionReceipt({
-    hash:    txHash,
-    enabled: !!txHash,
-    onSuccess() { setIsSuccess(true); setIsPending(false); },
-    onError(e)  { setError(parseContractError(e)); setIsPending(false); },
+  const receipt = useWaitForTransactionReceipt({
+    hash: txHash,
+    query: {
+      enabled: !!txHash,
+    },
   });
 
-  const reset = () => { setError(null); setIsSuccess(false); setTxHash(null); };
+  // Log txHash state changes
+  useEffect(() => {
+    console.log("INTERNAL: txHash state changed", txHash);
+  }, [txHash]);
+
+  // Log pending state transitions
+  useEffect(() => {
+    console.log("INTERNAL: isPending state changed", isPending);
+  }, [isPending]);
+
+  // Log receipt hook status
+  useEffect(() => {
+    if (txHash) {
+      safeLog("WAITING: useWaitForTransactionReceipt hook status", {
+        hash: txHash,
+        isLoading: receipt.isLoading,
+        isFetching: receipt.isFetching,
+        status: receipt.status,
+        data: receipt.data ? "received" : "none"
+      });
+    }
+  }, [txHash, receipt.isLoading, receipt.isFetching, receipt.status, receipt.data]);
+
+  useEffect(() => {
+    if (receipt.isSuccess) {
+      safeLog("receipt success", receipt.data);
+      setIsSuccess(true);
+      setIsPending(false);
+      window.dispatchEvent(new Event("auction-updated"));
+    }
+  }, [receipt.isSuccess, receipt.data]);
+
+  useEffect(() => {
+    if (receipt.isError) {
+      safeError("receipt failed", receipt.error);
+      if (receipt.error?.cause) safeError("receipt error cause", receipt.error.cause);
+      if (receipt.error?.shortMessage) safeError("receipt error shortMessage", receipt.error.shortMessage);
+      if (receipt.error?.message) safeError("receipt error message", receipt.error.message);
+      safeError("full receipt error json", receipt.error);
+
+      setError(parseContractError(receipt.error));
+      setIsPending(false);
+    }
+  }, [receipt.isError, receipt.error]);
+
+  // Timeout detection
+  useEffect(() => {
+    if (txHash && receipt.isLoading) {
+      const timer = setTimeout(() => {
+        console.error("transaction receipt timeout - 20s exceeded for hash", txHash);
+      }, 20000);
+      return () => clearTimeout(timer);
+    }
+  }, [txHash, receipt.isLoading]);
+
+  const reset = () => { 
+    console.log("INTERNAL: resetting contract write state");
+    setError(null); setIsSuccess(false); setTxHash(null); 
+  };
 
   const send = useCallback(async (functionName, args, value) => {
+    safeLog("sending tx", { functionName, args, value });
     reset();
     setIsPending(true);
     try {
       const params = { address, abi: AUCTION_ABI, functionName, args };
       if (value !== undefined) params.value = value;
+      
+      safeLog("sending tx: calling writeContractAsync", params);
       const hash = await writeContractAsync(params);
+      
+      console.log("wallet returned hash", hash);
+      if (!hash) {
+        console.error("wallet returned EMPTY/UNDEFINED hash after confirmation");
+      }
+      
       setTxHash(hash);
+      console.log("waiting for receipt", hash);
       return hash;
     } catch (e) {
+      safeError("writeContractAsync failed", e);
+      if (e?.cause) safeError("error cause", e.cause);
+      if (e?.shortMessage) safeError("error shortMessage", e.shortMessage);
+      if (e?.message) safeError("error message", e.message);
+      safeError("full error json", e);
+
       setError(parseContractError(e));
       setIsPending(false);
-      return null;
+      throw e;
     }
   }, [address, writeContractAsync]);
 
-  return { address, send, isPending: isPending || isTxLoading, isSuccess, error, txHash, reset };
+  return { address, send, isPending: isPending || receipt.isLoading, isSuccess, error, txHash, reset };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,6 +140,8 @@ function useContractWrite() {
 //  Fetches all auctions + their IPFS metadata.
 //  NOTE: auctionCounter is the NEXT id, so ids are 0 … auctionCounter-1
 // ─────────────────────────────────────────────────────────────────────────────
+
+const metadataCache = new Map();
 
 export function useAuctionList() {
   const chainId = useChainId();
@@ -97,6 +173,12 @@ export function useAuctionList() {
   });
 
   useEffect(() => {
+    const refresh = () => refetch();
+    window.addEventListener("auction-updated", refresh);
+    return () => window.removeEventListener("auction-updated", refresh);
+  }, []);
+
+  useEffect(() => {
     if (!results) return;
 
     const raw = results
@@ -113,8 +195,12 @@ export function useAuctionList() {
     Promise.all(
       raw.map(async (a) => {
         try {
+          if (metadataCache.has(a.metadataCID)) {
+            return { ...a, ...metadataCache.get(a.metadataCID) };
+          }
           console.log("auction list metadata field", a.metadataCID);
           const meta = await fetchMetadata(a.metadataCID);
+          metadataCache.set(a.metadataCID, meta);
           return { ...a, ...meta };
         } catch {
           return { ...a, name: "Metadata unavailable", description: "", image: "" };
@@ -150,10 +236,21 @@ export function useAuction(auctionId) {
   const { data: minTotal } = useReadContract({ address, abi: AUCTION_ABI, functionName: "minimumBidTotal", args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
 
   useEffect(() => {
+    const refresh = () => refetch();
+    window.addEventListener("auction-updated", refresh);
+    return () => window.removeEventListener("auction-updated", refresh);
+  }, []);
+
+  useEffect(() => {
     if (!data) return;
     const [metadataCID] = data;
+    
+    if (metadata?.__cid === metadataCID) return;
+
     console.log("auction metadata field", metadataCID);
-    fetchMetadata(metadataCID).then(setMetadata).catch(() => {});
+    fetchMetadata(metadataCID).then((m) => {
+      setMetadata({ ...m, __cid: metadataCID });
+    }).catch(() => {});
   }, [data]);
 
   if (!data) return { isLoading, isError, refetch };
@@ -282,13 +379,14 @@ export function usePlaceBid(auctionId) {
   const { data: minTotal } = useReadContract({ address, abi: AUCTION_ABI, functionName: "minimumBidTotal", args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
 
   async function placeBid(bidAmountEth) {
+    console.log("placeBid attempt", { auctionId, bidAmountEth });
     const netBid  = ethers.parseEther(bidAmountEth.toString());
     const feeVal  = fee ?? 0n;
     const total   = netBid + feeVal;
 
     if (minTotal && total < minTotal) {
-      // surface as error without sending tx
-      return;
+      console.error("Bid below minimum total", { total, minTotal });
+      throw new Error("Bid below minimum total");
     }
 
     return send("placeBid", [BigInt(auctionId)], total);
@@ -303,7 +401,21 @@ export function usePlaceBid(auctionId) {
 
 export function useEndAuction() {
   const { send, ...state } = useContractWrite();
-  return { endAuction: (id) => send("endAuction", [BigInt(id)]), ...state };
+
+  return {
+    endAuction: async (id) => {
+      console.log("end auction attempt", id);
+
+      try {
+        return await send("endAuction", [BigInt(id)]);
+      } catch (e) {
+        console.error("end auction failed", e);
+        throw e;
+      }
+    },
+
+    ...state,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -339,7 +451,19 @@ export function useWithdrawBid(auctionId) {
 export function useExtendBySeller() {
   const { send, ...state } = useContractWrite();
   return {
-    extendBySeller: (auctionId, extraSecs) => send("extendBySeller", [BigInt(auctionId), BigInt(extraSecs)]),
+    extendBySeller: async (auctionId, extraSecs) => {
+      console.log("extend attempt", {
+        auctionId,
+        extraSecs,
+      });
+
+      try {
+        return await send("extendBySeller", [BigInt(auctionId), BigInt(extraSecs)]);
+      } catch (e) {
+        console.error("extend failed", e);
+        throw e;
+      }
+    },
     ...state,
   };
 }

@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAccount, useChainId, usePublicClient, useWriteContract } from "wagmi";
 import { AUCTION_ABI, getContractAddress } from "@/config/contract";
-import { useAuctionList } from "@/hooks/useAuctionList";
+import { useAuctionList } from "@/hooks/UseAuction";
 import { ipfsImageUrl, uploadMetadata } from "@/utils/ipfs";
 import { parseContractError, parseEth } from "@/utils/formatters";
 import { zeroAddress } from "viem";
@@ -56,24 +56,23 @@ export function AuctionProvider({ children }: { children: ReactNode }) {
   const publicClient = usePublicClient();
   const contractAddress = getContractAddress(chainId);
   const { writeContractAsync } = useWriteContract();
-  const { auctions: chainAuctions, saveCid, isLoading: isListLoading } = useAuctionList();
+  const { auctions: chainAuctions, isLoading: isListLoading } = useAuctionList();
 
   const [selectedAuctionId, setSelectedAuctionId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const auctions = useMemo<Auction[]>(() => {
-    return chainAuctions.map((auction) => {
-      const metadata = auction.metadata;
+    return chainAuctions.map((auction: any) => {
       const highestBidder =
         auction.highestBidder && auction.highestBidder !== zeroAddress ? auction.highestBidder : null;
       const currentBid = Number(auction.highestBid > 0n ? auction.highestBid : 0n);
 
       return {
         id: String(auction.id),
-        title: metadata?.name ?? `Auction #${auction.id}`,
-        description: metadata?.description ?? "Metadata unavailable",
-        image: ipfsImageUrl(metadata?.images?.[0] ?? ""),
+        title: auction.name ?? `Auction #${auction.id}`,
+        description: auction.description ?? "Metadata unavailable",
+        image: auction.image ?? "",
         startingBid: currentBid / 1e18,
         currentBid: currentBid / 1e18,
         highestBidder,
@@ -114,22 +113,22 @@ export function AuctionProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       const durationSeconds = Math.max(3600, Math.floor((auction.endTime - Date.now()) / 1000));
-      const { cid, cidBytes32 } = await uploadMetadata({
+      const { uploadAuctionToIPFS } = await import("@/utils/ipfs");
+      const { metadataCID } = await uploadAuctionToIPFS({
         name: auction.title,
         description: auction.description,
         condition: "Good",
-        images: [auction.image],
+        imageFile: null,
       });
 
       const hash = await writeContractAsync({
         address: contractAddress,
         abi: AUCTION_ABI,
         functionName: "createAuction",
-        args: [cidBytes32, parseEth(auction.startingBid), BigInt(durationSeconds), parseEth("0.01")],
+        args: [metadataCID, parseEth(auction.startingBid), BigInt(durationSeconds), parseEth("0.01")],
       });
 
       await waitForReceipt(hash);
-      saveCid(cidBytes32, cid);
       return true;
     } catch (caught) {
       setError(parseContractError(caught));
@@ -152,7 +151,7 @@ export function AuctionProvider({ children }: { children: ReactNode }) {
       const fee = (await publicClient.readContract({
         address: contractAddress,
         abi: AUCTION_ABI,
-        functionName: "participationFee",
+        functionName: "buyerFee",
         args: [auctionIdBigInt],
       })) as bigint;
 

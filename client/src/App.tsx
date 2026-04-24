@@ -188,7 +188,7 @@ function AuctionDetailPage() {
   const isSeller =
     connectedAddr &&
     auction.seller &&
-    connectedAddr.toLowerCase() === String(auction.seller).toLowerCase();
+    String(connectedAddr).toLowerCase() === String(auction.seller).toLowerCase();
 
   async function submitBid() {
     setLocalBidError(null);
@@ -274,7 +274,7 @@ function AuctionDetailPage() {
           <Feedback error={localBidError || bid.error} success={bid.isSuccess} />
         </PageCard>
 
-        {!auction.ended && isExpired(auction.deadline) && (
+        {!auction.ended && (Number(auction.deadline) + 16) <= Math.floor(Date.now() / 1000) && (
           <PageCard title="Finalize Auction">
             <button
               type="button"
@@ -314,7 +314,12 @@ function AuctionDetailPage() {
                 className={inputClassName()}
               />
             </Field>
-            <button type="button" disabled={extend.isPending} onClick={submitExtension} className={buttonClassName(extend.isPending)}>
+            <button
+              type="button"
+              disabled={extend.isPending || Math.floor(Date.now() / 1000) >= Number(auction.deadline)}
+              onClick={submitExtension}
+              className={buttonClassName(extend.isPending || Math.floor(Date.now() / 1000) >= Number(auction.deadline))}
+            >
               {extend.isPending ? "Submitting..." : "Extend by seller"}
             </button>
             <Feedback error={localExtendError || extend.error} success={extend.isSuccess} />

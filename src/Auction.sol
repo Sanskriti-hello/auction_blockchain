@@ -3,30 +3,74 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/// @title Auction — CS218 Decentralised Auction DApp
-/// @notice Supports seller registration/verification, IPFS metadata, dynamic
-///         buyer fees, anti-sniping extensions, and admin fee management.
 contract Auction is ReentrancyGuard {
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  Storage
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
+    //  Constants
+    // -------------------------------------------------------------------------
+
+    uint256 public constant EXTENSION_TIME        = 3 minutes;
+    uint256 public constant MAX_EXTENSIONS        = 5;
+    uint256 public constant MAX_EXTENSION_PERCENT = 20;
+    uint256 public constant TIMESTAMP_BUFFER      = 15 seconds;
+    uint256 public constant MIN_DURATION          = 10 minutes;
+
+    // -------------------------------------------------------------------------
+    //  Custom Errors
+    // -------------------------------------------------------------------------
+
+    error AuctionNotExist();
+    error AuctionAlreadyFinalized();
+    error StartingPriceMustBePositive();
+    error IncrementMustBePositive();
+    error DurationTooShort();
+    error DurationTooLong();
+    error AuctionExpired();
+    error SellerCannotBid();
+    error AlreadyHighestBidder();
+    error BidBelowStartingPrice();
+    error BidTooLow();
+    error MustSendMoreThanFee();
+    error OnlySellerCanExtend();
+    error ExtensionMustBePositive();
+    error ExceedsMaxSellerExtension();
+    error AuctionNotYetEnded();
+    error CurrentWinnerCannotWithdraw();
+    error NothingToWithdraw();
+    error ETHTransferFailed();
+    error NotOwner();
+    error AlreadyRegistered();
+    error InsufficientRegistrationFee();
+    error SellerNotPaidFee();
+    error SellerNotVerified();
+    error NotCurrentlyVerified();
+    error NoFeesToWithdraw();
+
+    // -------------------------------------------------------------------------
+    //  Structs
+    // -------------------------------------------------------------------------
 
     struct AuctionDetails {
-        string   metadataCID;       // IPFS CID for name/image/description JSON
-        address  seller;
-        uint256  startingPrice;
-        uint256  highestBid;
-        address  highestBidder;
-        uint256  deadline;          // unix timestamp
-        uint256  endBlock;          // block-number gate (anti-manipulation)
-        uint256  duration;          // original duration in seconds
-        uint256  minIncrement;      // minimum raise in wei
-        uint256  extensionCount;    // auto-extensions so far
-        uint256  sellerExtendedTime;// total time seller has added
-        uint256  numBidders;        // unique bidder count (for fee scaling)
-        bool     ended;
-        bool     exists;
+        // Slot 0
+        address seller;
+        uint8   extensionCount;
+        uint32  sellerExtendedTime;
+        bool    ended;
+        bool    exists;
+        // Slot 1
+        uint256 startingPrice;
+        // Slot 2
+        uint256 highestBid;
+        // Slot 3
+        address highestBidder;
+        // Slot 4
+        uint40  deadline;
+        uint32  duration;
+        uint128 minIncrement;
+        // Slot 5
+        string  metadataCID;
+        // Slot 6
+        uint256 numBidders;
     }
 
     struct SellerInfo {
@@ -34,6 +78,10 @@ contract Auction is ReentrancyGuard {
         bool    hasPaidFee;
         uint256 registeredAt;
     }
+
+    // -------------------------------------------------------------------------
+    //  State
+    // -------------------------------------------------------------------------
 
     address public owner;
 
@@ -48,17 +96,9 @@ contract Auction is ReentrancyGuard {
     uint256 public baseBuyerFee          = 0.001 ether;
     uint256 public accumulatedFees;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  Constants
-    // ─────────────────────────────────────────────────────────────────────────
-
-    uint256 public constant EXTENSION_TIME       = 2 minutes;
-    uint256 public constant MAX_EXTENSIONS       = 5;
-    uint256 public constant MAX_EXTENSION_PERCENT = 20;
-
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     //  Events
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     event AuctionCreated(uint256 indexed auctionId, string metadataCID, uint256 startingPrice, uint256 deadline);
     event BidPlaced(uint256 indexed auctionId, address indexed bidder, uint256 amount);
@@ -71,206 +111,218 @@ contract Auction is ReentrancyGuard {
     event FeesUpdated(uint256 newSellerFee, uint256 newBuyerFee);
     event FeesWithdrawn(address indexed admin, uint256 amount);
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     //  Modifiers
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Not owner");
+    modifier auctionExists(uint256 auctionId) {
+        if (!auctions[auctionId].exists) revert AuctionNotExist();
         _;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    // -------------------------------------------------------------------------
     //  Constructor
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     constructor() {
         owner = msg.sender;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  Seller registration
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
+    //  Seller Registration
+    // -------------------------------------------------------------------------
 
-    /// @notice Pay the registration fee to become a seller candidate.
     function registerAsSeller() external payable {
-        require(!sellers[msg.sender].hasPaidFee,  "Already registered");
-        require(msg.value >= sellerRegistrationFee, "Insufficient registration fee");
-
-        sellers[msg.sender].hasPaidFee    = true;
-        sellers[msg.sender].registeredAt  = block.timestamp;
-        accumulatedFees                  += msg.value;
-
+        if (sellers[msg.sender].hasPaidFee)      revert AlreadyRegistered();
+        if (msg.value < sellerRegistrationFee)   revert InsufficientRegistrationFee();
+        sellers[msg.sender].hasPaidFee   = true;
+        sellers[msg.sender].registeredAt = block.timestamp;
+        accumulatedFees                 += msg.value;
         emit SellerRegistered(msg.sender, msg.value);
     }
 
-    /// @notice Admin approves a seller.
     function verifySeller(address sellerAddr) external onlyOwner {
-        require(sellers[sellerAddr].hasPaidFee, "Seller has not paid registration fee");
+        if (!sellers[sellerAddr].hasPaidFee) revert SellerNotPaidFee();
         sellers[sellerAddr].isVerified = true;
         emit SellerVerified(sellerAddr);
     }
 
-    /// @notice Admin revokes a seller.
     function revokeSeller(address sellerAddr) external onlyOwner {
-        require(sellers[sellerAddr].isVerified, "Not currently verified");
+        if (!sellers[sellerAddr].isVerified) revert NotCurrentlyVerified();
         sellers[sellerAddr].isVerified = false;
         emit SellerRevoked(sellerAddr);
     }
 
-    /// @notice Convenience view used by the frontend.
     function isVerifiedSeller(address sellerAddr) external view returns (bool) {
         return sellers[sellerAddr].isVerified;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  Auction lifecycle
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
+    //  Create Auction
+    // -------------------------------------------------------------------------
 
-    /// @notice Create a new auction. Caller must be a verified seller.
     function createAuction(
-        string  memory metadataCID,
-        uint256        startingPrice,
-        uint256        durationSeconds,
-        uint256        minIncrement
+        string  calldata metadataCID,
+        uint256          startingPrice,
+        uint256          durationSeconds,
+        uint256          minIncrement
     ) external returns (uint256) {
-        require(sellers[msg.sender].isVerified, "Seller not verified by admin");
-        require(startingPrice  > 0,           "Starting price must be > 0");
-        require(minIncrement   > 0,           "Increment must be > 0");
-        require(durationSeconds >= 1 minutes, "Duration must be at least 1 minute");
-        require(durationSeconds <= 1 days,    "Duration cannot exceed 24 hours");
+        if (!sellers[msg.sender].isVerified)     revert SellerNotVerified();
+        if (startingPrice  == 0)                 revert StartingPriceMustBePositive();
+        if (minIncrement   == 0)                 revert IncrementMustBePositive();
+        if (durationSeconds <  MIN_DURATION)     revert DurationTooShort();
+        if (durationSeconds >  1 days)           revert DurationTooLong();
 
         uint256 auctionId = auctionCounter++;
-        uint256 blocks    = durationSeconds / 12;
+        uint40  deadline  = uint40(block.timestamp + durationSeconds);
 
         auctions[auctionId] = AuctionDetails({
-            metadataCID:       metadataCID,
-            seller:            msg.sender,
-            startingPrice:     startingPrice,
-            highestBid:        startingPrice,
-            highestBidder:     address(0),
-            deadline:          block.timestamp + durationSeconds,
-            endBlock:          block.number    + blocks,
-            duration:          durationSeconds,
-            minIncrement:      minIncrement,
-            extensionCount:    0,
-            sellerExtendedTime:0,
-            numBidders:        0,
-            ended:             false,
-            exists:            true
+            metadataCID:        metadataCID,
+            seller:             msg.sender,
+            startingPrice:      startingPrice,
+            highestBid:         startingPrice,
+            highestBidder:      address(0),
+            deadline:           deadline,
+            duration:           uint32(durationSeconds),
+            minIncrement:       uint128(minIncrement),
+            extensionCount:     0,
+            sellerExtendedTime: 0,
+            numBidders:         0,
+            ended:              false,
+            exists:             true
         });
 
-        emit AuctionCreated(auctionId, metadataCID, startingPrice, block.timestamp + durationSeconds);
+        emit AuctionCreated(auctionId, metadataCID, startingPrice, deadline);
         return auctionId;
     }
 
-    /// @notice Place a bid. msg.value must cover the participation fee + bid amount.
-    function placeBid(uint256 _auctionId) external payable {
-        require(auctions[_auctionId].exists, "Auction does not exist");
-        AuctionDetails storage a = auctions[_auctionId];
+    // -------------------------------------------------------------------------
+    //  Place Bid
+    // -------------------------------------------------------------------------
 
-        require(block.number < a.endBlock,  "Auction has already ended");
-        require(!a.ended,                   "Auction is already finalized");
-        require(msg.sender != a.seller,     "Seller cannot bid");
-        require(msg.sender != a.highestBidder, "Already highest bidder");
+    function placeBid(uint256 _auctionId)
+        external
+        payable
+        auctionExists(_auctionId)
+    {
+        AuctionDetails storage auction = auctions[_auctionId];
 
-        // Dynamic fee: baseBuyerFee + 0.0001 ETH per extra bidder
-        uint256 fee      = buyerFee(_auctionId);
-        uint256 netBid   = msg.value - fee;
+        if (auction.ended)                         revert AuctionAlreadyFinalized();
+        uint40 deadline_ = auction.deadline;
+        if (block.timestamp >= deadline_)          revert AuctionExpired();
+        if (msg.sender == auction.seller)          revert SellerCannotBid();
+        if (msg.sender == auction.highestBidder)   revert AlreadyHighestBidder();
+
+        // Deduct fee
+        uint256 fee    = buyerFee(_auctionId);
+        if (msg.value <= fee)                      revert MustSendMoreThanFee();
+        uint256 netBid = msg.value - fee;
         accumulatedFees += fee;
 
-        require(netBid > 0, "Must send more than the participation fee");
-
-        if (a.highestBidder == address(0)) {
-            require(netBid >= a.startingPrice, "Bid below starting price");
+        address prevBidder = auction.highestBidder;
+        if (prevBidder == address(0)) {
+            if (netBid < auction.startingPrice)    revert BidBelowStartingPrice();
         } else {
-            uint256 minRequired = a.highestBid + a.minIncrement;
-            require(netBid >= minRequired, "Bid must be at least increment higher");
-            pendingReturns[_auctionId][a.highestBidder] += a.highestBid;
+            if (netBid < auction.highestBid + auction.minIncrement) revert BidTooLow();
+            pendingReturns[_auctionId][prevBidder] += auction.highestBid;
         }
 
         // Track unique bidders
         if (!_hasBid[_auctionId][msg.sender]) {
             _hasBid[_auctionId][msg.sender] = true;
-            a.numBidders++;
+            auction.numBidders++;
         }
 
-        // Anti-sniping: extend if bid lands in last EXTENSION_TIME window
-        if (
-            block.number < a.endBlock &&
-            (a.deadline - block.timestamp) < EXTENSION_TIME &&
-            a.extensionCount < MAX_EXTENSIONS
-        ) {
-            a.deadline    += EXTENSION_TIME;
-            a.endBlock    += (EXTENSION_TIME / 12);
-            a.extensionCount++;
-            emit AuctionExtended(_auctionId, a.deadline, "Anti-sniping auto-extension");
+        // Anti-snipe
+        if (deadline_ - block.timestamp < EXTENSION_TIME && auction.extensionCount < MAX_EXTENSIONS) {
+            deadline_             += uint40(EXTENSION_TIME);
+            auction.deadline       = deadline_;
+            auction.extensionCount++;
+            emit AuctionExtended(_auctionId, deadline_, "Anti-sniping auto-extension");
         }
 
-        a.highestBidder = msg.sender;
-        a.highestBid    = netBid;
+        auction.highestBidder = msg.sender;
+        auction.highestBid    = netBid;
         emit BidPlaced(_auctionId, msg.sender, netBid);
     }
 
-    /// @notice Seller can manually extend within the 20 % cap.
-    function extendBySeller(uint256 _auctionId, uint256 extraTime) external {
-        require(auctions[_auctionId].exists,    "Auction does not exist");
+    // -------------------------------------------------------------------------
+    //  Seller Extension
+    // -------------------------------------------------------------------------
+
+    function extendBySeller(uint256 _auctionId, uint256 extraTime)
+        external
+        auctionExists(_auctionId)
+    {
         AuctionDetails storage a = auctions[_auctionId];
 
-        require(msg.sender == a.seller,          "Only seller can extend");
-        require(block.number < a.endBlock,       "Auction already ended");
-        require(!a.ended,                        "Auction is finalized");
-        require(extraTime > 0,                   "Invalid extension");
+        if (a.ended)                       revert AuctionAlreadyFinalized();
+        if (msg.sender != a.seller)        revert OnlySellerCanExtend();
+        if (block.timestamp >= a.deadline) revert AuctionExpired();
+        if (extraTime == 0)                revert ExtensionMustBePositive();
 
-        uint256 maxAllowed = (a.duration * MAX_EXTENSION_PERCENT) / 100;
-        require(a.sellerExtendedTime + extraTime <= maxAllowed, "Exceeds allowed extension");
+        uint32 alreadyExtended = a.sellerExtendedTime;
+        if (alreadyExtended + uint32(extraTime) > (uint32(a.duration) * MAX_EXTENSION_PERCENT) / 100)
+            revert ExceedsMaxSellerExtension();
 
-        a.deadline          += extraTime;
-        a.endBlock          += (extraTime / 12);
-        a.sellerExtendedTime += extraTime;
-
+        a.deadline           += uint40(extraTime);
+        a.sellerExtendedTime  = alreadyExtended + uint32(extraTime);
         emit AuctionExtended(_auctionId, a.deadline, "Seller manual extension");
     }
 
-    /// @notice Finalise an auction after the block deadline has passed.
-    function endAuction(uint256 _auctionId) external {
-        require(auctions[_auctionId].exists, "Auction does not exist");
+    // -------------------------------------------------------------------------
+    //  End Auction
+    // -------------------------------------------------------------------------
+
+    function endAuction(uint256 _auctionId)
+        external
+        auctionExists(_auctionId)
+    {
         AuctionDetails storage a = auctions[_auctionId];
 
-        require(block.number >= a.endBlock, "Auction is still active");
-        require(!a.ended,                   "Auction already ended");
+        if (a.ended) revert AuctionAlreadyFinalized();
+        if (block.timestamp < uint256(a.deadline) + TIMESTAMP_BUFFER) revert AuctionNotYetEnded();
 
         a.ended = true;
 
-        uint256 finalAmount = 0;
-        if (a.highestBidder != address(0)) {
+        address winner = a.highestBidder;
+        if (winner != address(0)) {
             pendingReturns[_auctionId][a.seller] += a.highestBid;
-            finalAmount = a.highestBid;
         }
 
-        emit AuctionEnded(_auctionId, a.highestBidder, finalAmount);
+        emit AuctionEnded(_auctionId, winner, a.highestBid);
     }
 
-    /// @notice Withdraw a pending return (outbid amount or seller proceeds).
-    function withdrawBid(uint256 auctionId) external nonReentrant {
-        require(auctions[auctionId].exists, "Auction does not exist");
-        AuctionDetails storage a = auctions[auctionId];
+    // -------------------------------------------------------------------------
+    //  Withdraw
+    // -------------------------------------------------------------------------
 
-        require(!(msg.sender == a.highestBidder && !a.ended), "Winner cannot withdraw");
+    function withdrawBid(uint256 auctionId)
+        external
+        nonReentrant
+        auctionExists(auctionId)
+    {
+        AuctionDetails storage a = auctions[auctionId];
+        if (msg.sender == a.highestBidder && !a.ended) revert CurrentWinnerCannotWithdraw();
 
         uint256 amount = pendingReturns[auctionId][msg.sender];
-        require(amount > 0, "Nothing to withdraw");
+        if (amount == 0) revert NothingToWithdraw();
 
         pendingReturns[auctionId][msg.sender] = 0;
-        (bool ok, ) = msg.sender.call{value: amount}("");
-        require(ok, "Transfer failed");
+        (bool success, ) = msg.sender.call{value: amount}("");
+        if (!success) revert ETHTransferFailed();
 
         emit BidWithdrawn(auctionId, msg.sender, amount);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  Admin fee management
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
+    //  Admin Fee Management
+    // -------------------------------------------------------------------------
 
     function updateFees(uint256 newSellerFee, uint256 newBuyerFee) external onlyOwner {
         sellerRegistrationFee = newSellerFee;
@@ -280,55 +332,54 @@ contract Auction is ReentrancyGuard {
 
     function withdrawFees() external onlyOwner nonReentrant {
         uint256 amount = accumulatedFees;
-        require(amount > 0, "No fees to withdraw");
+        if (amount == 0) revert NoFeesToWithdraw();
         accumulatedFees = 0;
         (bool ok, ) = owner.call{value: amount}("");
-        require(ok, "Transfer failed");
+        if (!ok) revert ETHTransferFailed();
         emit FeesWithdrawn(owner, amount);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
     //  Views
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
-    /// @notice Returns the participation fee for a given auction (scales with bidder count).
-    function buyerFee(uint256 auctionId) public view returns (uint256) {
-        require(auctions[auctionId].exists, "Auction does not exist");
-        uint256 extra = auctions[auctionId].numBidders * 0.0001 ether;
-        return baseBuyerFee + extra;
+    function buyerFee(uint256 auctionId) public view auctionExists(auctionId) returns (uint256) {
+        return baseBuyerFee + (auctions[auctionId].numBidders * 0.0001 ether);
     }
 
-    /// @notice Minimum total ETH (fee + bid) required to beat the current highest bid.
-    function minimumBidTotal(uint256 auctionId) external view returns (uint256) {
-        require(auctions[auctionId].exists, "Auction does not exist");
+    function minimumBidTotal(uint256 auctionId) external view auctionExists(auctionId) returns (uint256) {
         AuctionDetails storage a = auctions[auctionId];
         uint256 fee = buyerFee(auctionId);
-        if (a.highestBidder == address(0)) {
-            return a.startingPrice + fee;
-        }
+        if (a.highestBidder == address(0)) return a.startingPrice + fee;
         return a.highestBid + a.minIncrement + fee;
     }
 
-    /// @notice Full auction data for the frontend.
-    function getAuction(uint256 auctionId) external view returns (
-        string  memory metadataCID,
-        address        seller,
-        uint256        highestBid,
-        address        highestBidder,
-        uint256        deadline,
-        bool           ended,
-        uint256        numBidders
-    ) {
-        require(auctions[auctionId].exists, "Invalid auction ID");
+    function getAuction(uint256 auctionId)
+        external
+        view
+        auctionExists(auctionId)
+        returns (
+            string  memory metadataCID,
+            address        seller,
+            uint256        highestBid,
+            address        highestBidder,
+            uint256        deadline,
+            bool           ended,
+            uint256        numBidders
+        )
+    {
         AuctionDetails storage a = auctions[auctionId];
-        return (
-            a.metadataCID,
-            a.seller,
-            a.highestBid,
-            a.highestBidder,
-            a.deadline,
-            a.ended,
-            a.numBidders
-        );
+        return (a.metadataCID, a.seller, a.highestBid, a.highestBidder, a.deadline, a.ended, a.numBidders);
+    }
+
+    function timeRemaining(uint256 auctionId)
+        external
+        view
+        auctionExists(auctionId)
+        returns (uint256)
+    {
+        uint40 dl = auctions[auctionId].deadline;
+        if (block.timestamp >= dl) return 0;
+        return dl - block.timestamp;
     }
 }

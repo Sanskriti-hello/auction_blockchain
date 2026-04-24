@@ -62,7 +62,7 @@ contract AuctionTest is Test {
     function test_RevertIf_SellerRegistersAgain() public {
         vm.startPrank(seller);
         auction.registerAsSeller{value: REG_FEE}();
-        vm.expectRevert("Already registered");
+        vm.expectRevert(Auction.AlreadyRegistered.selector);
         auction.registerAsSeller{value: REG_FEE}();
         vm.stopPrank();
     }
@@ -72,7 +72,7 @@ contract AuctionTest is Test {
         auction.registerAsSeller{value: REG_FEE}();
         // NOT verified
         vm.prank(seller);
-        vm.expectRevert("Seller not verified by admin");
+        vm.expectRevert(Auction.SellerNotVerified.selector);
         auction.createAuction("QmTest", 0.1 ether, 1 hours, 0.01 ether);
     }
 
@@ -139,7 +139,7 @@ contract AuctionTest is Test {
         uint256 fee = auction.buyerFee(id);
 
         vm.prank(bidder1);
-        vm.expectRevert("Bid below starting price");
+        vm.expectRevert(Auction.BidBelowStartingPrice.selector);
         auction.placeBid{value: 0.05 ether + fee}(id);
     }
 
@@ -148,7 +148,7 @@ contract AuctionTest is Test {
         uint256 fee = auction.buyerFee(id);
 
         vm.prank(seller);
-        vm.expectRevert("Seller cannot bid");
+        vm.expectRevert(Auction.SellerCannotBid.selector);
         auction.placeBid{value: 0.1 ether + fee}(id);
     }
 
@@ -162,7 +162,7 @@ contract AuctionTest is Test {
         auction.placeBid{value: 0.1 ether + fee}(id);
 
         // fast-forward past the end block
-        vm.roll(block.number + 1_000_000);
+        vm.warp(block.timestamp + 1 hours + 1 minutes);
         auction.endAuction(id);
 
         (, , , , , bool ended, ) = auction.getAuction(id);
@@ -172,7 +172,7 @@ contract AuctionTest is Test {
 
     function test_RevertIf_EndAuctionTooEarly() public {
         uint256 id = _createAuction();
-        vm.expectRevert("Auction is still active");
+        vm.expectRevert(Auction.AuctionNotYetEnded.selector);
         auction.endAuction(id);
     }
 
@@ -193,7 +193,7 @@ contract AuctionTest is Test {
         uint256 id = _createAuction();
         // 20% of 1 hour = 720 seconds
         vm.prank(seller);
-        vm.expectRevert("Exceeds allowed extension");
+        vm.expectRevert(Auction.ExceedsMaxSellerExtension.selector);
         auction.extendBySeller(id, 721);
     }
 
@@ -220,7 +220,7 @@ contract AuctionTest is Test {
         auction.registerAsSeller{value: REG_FEE}();
 
         vm.prank(bidder1);
-        vm.expectRevert("Not owner");
+        vm.expectRevert(Auction.NotOwner.selector);
         auction.verifySeller(seller);
     }
 

@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { X, Clock, User, Wallet, Trophy, RefreshCw } from 'lucide-react';
-import { useAuctionDetails } from '@/hooks/useAuctionDetails';
-import { useAuctionActions } from '@/hooks/useAuctionActions';
+import {
+  useAuction,
+  useEndAuction,
+  useWithdrawBid,
+  useExtendBySeller,
+  usePlaceBid
+} from '@/hooks/UseAuction';
 import { formatEthShort, shortAddr } from '@/utils/formatters';
 import { useWeb3 } from '@/contexts/Web3Context';
 
@@ -13,18 +18,44 @@ interface AuctionDetailProps {
 
 export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps) {
   const { address, isConnected } = useWeb3();
-  const { auction, isLoading } = useAuctionDetails(auctionId);
-  const { placeBid, endAuction, withdrawBid, extendBySeller, isPending, error, txHash } =
-    useAuctionActions(auctionId);
+  const {
+    seller,
+    highestBid,
+    highestBidder,
+    deadline,
+    ended,
+    numBidders,
+    name: title,
+    description,
+    image,
+    condition,
+    fee,
+    minTotal: minBidTotal,
+    isLoading,
+    refetch
+  } = useAuction(auctionId);
+
+  const { placeBid, isPending: isBidPending, error: bidError, txHash: bidHash } = usePlaceBid(auctionId);
+  const { endAuction, isPending: isEndPending, error: endError, txHash: endHash } = useEndAuction();
+  const { withdrawBid, pendingAmount, isPending: isWithdrawPending, error: withdrawError, txHash: withdrawHash } = useWithdrawBid(auctionId);
+  const { extendBySeller, isPending: isExtendPending, error: extendError, txHash: extendHash } = useExtendBySeller();
+
+  const isPending = isBidPending || isEndPending || isWithdrawPending || isExtendPending;
+  const error = bidError || endError || withdrawError || extendError;
+  const txHash = bidHash || endHash || withdrawHash || extendHash;
+
   const [bidAmount, setBidAmount] = useState('');
   const [timeLeft, setTimeLeft] = useState('');
   const [extensionHours, setExtensionHours] = useState('1');
 
+  const auctionEndTime = Number(deadline) * 1000;
+  const auctionStatus = ended ? 'ended' : 'active';
+
   useEffect(() => {
-    if (!auction) return;
+    if (!deadline) return;
 
     const updateTimer = () => {
-      const diff = auction.endTime - Date.now();
+      const diff = Number(deadline) * 1000 - Date.now();
       if (diff <= 0) {
         setTimeLeft('Auction Ended');
         return;
@@ -43,15 +74,15 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [auction]);
+  }, [deadline]);
 
   const isSeller = useMemo(() => {
-    if (!auction || !address) return false;
-    return auction.creator.toLowerCase() === address.toLowerCase();
-  }, [address, auction]);
+    if (!seller || !address) return false;
+    return String(seller).toLowerCase() === String(address).toLowerCase();
+  }, [address, seller]);
 
-  const canEnd = auction?.status === 'active' && auction.endTime <= Date.now();
-  const hasPendingWithdrawal = (auction?.pendingAmount ?? 0n) > 0n;
+  const canEnd = auctionStatus === 'active' && (auctionEndTime + 16000) <= Date.now();
+  const hasPendingWithdrawal = (pendingAmount ?? 0n) > 0n;
 
   if (!isOpen) return null;
 
@@ -73,37 +104,37 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
         </button>
 
         <div className="p-8">
-          {isLoading || !auction ? (
+          {isLoading || !seller ? (
             <div className="py-20 text-center text-white/60 font-body">Loading auction...</div>
           ) : (
             <>
               <div className="mb-8 rounded-xl overflow-hidden h-72 bg-black">
-                <img src={auction.image} alt={auction.title} className="w-full h-full object-cover" />
+                <img src={image} alt={title} className="w-full h-full object-cover" />
               </div>
 
               <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-6 mb-6">
                 <div>
-                  <h2 className="text-3xl font-heading italic text-white mb-3">{auction.title}</h2>
-                  <p className="text-white/60 font-body mb-2">{auction.description}</p>
-                  <p className="text-white/40 text-sm font-body">Seller: {shortAddr(auction.creator)}</p>
+                  <h2 className="text-3xl font-heading italic text-white mb-3">{title}</h2>
+                  <p className="text-white/60 font-body mb-2">{description}</p>
+                  <p className="text-white/40 text-sm font-body">Seller: {shortAddr(seller)}</p>
                 </div>
                 <div
                   className="px-4 py-2 rounded-full text-xs font-medium self-start"
                   style={{
                     background:
-                      auction.status === 'active' ? 'rgba(34, 197, 94, 0.2)' : 'rgba(107, 114, 128, 0.2)',
-                    color: auction.status === 'active' ? '#22c55e' : '#9ca3af',
+                      auctionStatus === 'active' ? 'rgba(34, 197, 94, 0.2)' : 'rgba(107, 114, 128, 0.2)',
+                    color: auctionStatus === 'active' ? '#22c55e' : '#9ca3af',
                   }}
                 >
-                  {auction.status}
+                  {auctionStatus}
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-                <DetailCard label="Current Bid" value={`${auction.currentBid.toFixed(4)} ETH`} />
+                <DetailCard label="Current Bid" value={`${(Number(highestBid ?? 0) / 1e18).toFixed(4)} ETH`} />
                 <DetailCard label="Time Left" value={timeLeft} icon={<Clock className="w-4 h-4" />} />
-                <DetailCard label="Participation Fee" value={formatEthShort(auction.fee)} icon={<Wallet className="w-4 h-4" />} />
-                <DetailCard label="Bidders" value={auction.numBidders.toString()} icon={<User className="w-4 h-4" />} />
+                <DetailCard label="Buyer Fee" value={formatEthShort(fee)} icon={<Wallet className="w-4 h-4" />} />
+                <DetailCard label="Bidders" value={numBidders?.toString() ?? '0'} icon={<User className="w-4 h-4" />} />
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
@@ -116,7 +147,7 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
                 >
                   <h3 className="text-lg font-heading italic text-white mb-3">Place Bid</h3>
                   <p className="text-white/50 text-sm font-body mb-4">
-                    Minimum total including fee: {formatEthShort(auction.minBidTotal)}
+                    Minimum total including fee: {formatEthShort(minBidTotal)}
                   </p>
                   {isConnected ? (
                     <div className="space-y-4">
@@ -132,10 +163,10 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
                       <button
                         onClick={async () => {
                           if (!bidAmount) return;
-                          const success = await placeBid(bidAmount, auction.fee);
-                          if (success) setBidAmount('');
+                          const hash = await placeBid(bidAmount);
+                          if (hash) setBidAmount('');
                         }}
-                        disabled={isPending || auction.status !== 'active' || isSeller}
+                        disabled={isPending || auctionStatus !== 'active' || isSeller}
                         className="w-full py-3 rounded-lg font-medium text-black transition-all duration-300 hover:scale-[1.01] active:scale-95 disabled:opacity-50"
                         style={{ background: 'rgb(255, 255, 255)' }}
                       >
@@ -157,7 +188,7 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
                   <h3 className="text-lg font-heading italic text-white mb-3">Auction Actions</h3>
                   <div className="space-y-3">
                     <button
-                      onClick={() => void endAuction()}
+                      onClick={() => auctionId && void endAuction(auctionId)}
                       disabled={isPending || !canEnd}
                       className="w-full py-3 rounded-lg font-medium text-black transition-all duration-300 disabled:opacity-50"
                       style={{ background: 'rgb(255, 255, 255)' }}
@@ -173,7 +204,7 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
                         border: '1px solid rgba(255, 255, 255, 0.2)',
                       }}
                     >
-                      Withdraw {hasPendingWithdrawal ? formatEthShort(auction.pendingAmount) : 'Pending Funds'}
+                      Withdraw {hasPendingWithdrawal ? formatEthShort(pendingAmount) : 'Pending Funds'}
                     </button>
 
                     {isSeller && (
@@ -190,8 +221,8 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
                             <option value="24">24 Hours</option>
                           </select>
                           <button
-                            onClick={() => void extendBySeller(Number(extensionHours) * 3600)}
-                            disabled={isPending || auction.status !== 'active'}
+                            onClick={() => auctionId && void extendBySeller(auctionId, Number(extensionHours) * 3600)}
+                            disabled={isPending || auctionStatus !== 'active' || Date.now() >= auctionEndTime}
                             className="px-4 py-3 rounded-lg text-white border border-white/20 transition-colors disabled:opacity-50"
                             style={{ background: 'rgba(255, 255, 255, 0.08)' }}
                           >
@@ -234,15 +265,15 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm font-body text-white/70">
                   <div>
                     <p className="text-white/40 mb-1">Highest Bidder</p>
-                    <p>{auction.highestBidder ? shortAddr(auction.highestBidder) : 'No bids yet'}</p>
+                    <p>{highestBidder ? shortAddr(highestBidder) : 'No bids yet'}</p>
                   </div>
                   <div>
                     <p className="text-white/40 mb-1">Condition</p>
-                    <p>{auction.condition}</p>
+                    <p>{condition}</p>
                   </div>
                   <div>
                     <p className="text-white/40 mb-1">Withdrawable</p>
-                    <p>{hasPendingWithdrawal ? formatEthShort(auction.pendingAmount) : 'Nothing pending'}</p>
+                    <p>{hasPendingWithdrawal ? formatEthShort(pendingAmount) : 'Nothing pending'}</p>
                   </div>
                 </div>
               </div>
