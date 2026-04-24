@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { ethers } from "ethers";
 import { Link, Route, Switch, useLocation, useParams, useRoute } from "wouter";
 import { useAccount, useChainId, useReadContract } from "wagmi";
-import { NetworkBanner } from "./components/NetworkBanner";
+import NetworkBanner from "./components/Networkbanner";
 import { AUCTION_ABI, getContractAddress } from "./config/contract";
 import {
   useAdminPanel,

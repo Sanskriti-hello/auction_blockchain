@@ -1,22 +1,38 @@
-// src/Providers.jsx
-// Wrap your entire app with this in main.jsx
-
 import "@rainbow-me/rainbowkit/styles.css";
-import { RainbowKitProvider, lightTheme } from "@rainbow-me/rainbowkit";
-import { WagmiProvider }                  from "wagmi";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { wagmiConfig }                    from "./config/wagmi";
+
+import {
+  RainbowKitProvider,
+  darkTheme,
+} from "@rainbow-me/rainbowkit";
+
+import {
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
+
+import { WagmiProvider } from "wagmi";
+
+import { wagmiConfig } from "./config/wagmi";
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, staleTime: 10_000, refetchInterval: 12_000 } },
+  defaultOptions: {
+    queries: {
+      retry: false,
+    },
+  },
 });
 
-export function Providers({ children }) {
+export function Providers({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider
-          theme={lightTheme({ accentColor: "#6366f1", borderRadius: "medium" })}
+          theme={darkTheme()}
+          showRecentTransactions={false}
         >
           {children}
         </RainbowKitProvider>

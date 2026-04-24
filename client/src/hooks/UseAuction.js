@@ -113,6 +113,7 @@ export function useAuctionList() {
     Promise.all(
       raw.map(async (a) => {
         try {
+          console.log("auction list metadata field", a.metadataCID);
           const meta = await fetchMetadata(a.metadataCID);
           return { ...a, ...meta };
         } catch {
@@ -151,6 +152,7 @@ export function useAuction(auctionId) {
   useEffect(() => {
     if (!data) return;
     const [metadataCID] = data;
+    console.log("auction metadata field", metadataCID);
     fetchMetadata(metadataCID).then(setMetadata).catch(() => {});
   }, [data]);
 
@@ -242,7 +244,9 @@ export function useCreateAuction() {
     try {
       const { uploadAuctionToIPFS } = await import("../utils/ipfs");
       const result = await uploadAuctionToIPFS({ name, description, condition, imageFile });
+      console.log("upload response", result);
       metadataCID = result.metadataCID;
+      console.log("metadata uri", metadataCID);
     } catch (e) {
       setStep(null);
       // surface the error through state.error by re-using the send error path

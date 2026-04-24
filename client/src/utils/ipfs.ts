@@ -38,7 +38,9 @@ export async function uploadAuctionToIPFS({ name, description, condition, imageF
     throw new Error(err.error || "IPFS upload failed");
   }
 
-  return res.json(); // { metadataCID, imageCID }
+  const result = await res.json();
+  console.log("upload response", result);
+  return result; // { metadataCID, imageCID }
 }
 
 /**
@@ -51,6 +53,7 @@ export async function uploadAuctionToIPFS({ name, description, condition, imageF
 export async function fetchMetadata(cid) {
   if (!cid) return null;
 
+  console.log("fetchMetadata cid", cid);
   const res = await fetch(`${BACKEND_URL}/metadata?cid=${encodeURIComponent(cid)}`);
   if (!res.ok) throw new Error(`Failed to load metadata for ${cid}`);
   return res.json();
