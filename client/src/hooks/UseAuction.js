@@ -11,8 +11,9 @@ import {
   useWaitForTransactionReceipt,
   useChainId,
   useAccount,
+  usePublicClient,
 } from "wagmi";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { ethers } from "ethers";
 import { AUCTION_ABI, getContractAddress } from "../config/contract";
 import { fetchMetadata }        from "../utils/ipfs";
@@ -203,7 +204,13 @@ export function useAuctionList() {
           metadataCache.set(a.metadataCID, meta);
           return { ...a, ...meta };
         } catch {
-          return { ...a, name: "Metadata unavailable", description: "", image: "" };
+          return { 
+            ...a, 
+            name: "Untitled Auction", 
+            description: "Metadata unavailable.", 
+            image: null,
+            metadataError: true 
+          };
         }
       })
     ).then(setEnriched);
@@ -248,10 +255,21 @@ export function useAuction(auctionId) {
     if (metadata?.__cid === metadataCID) return;
 
     console.log("auction metadata field", metadataCID);
-    fetchMetadata(metadataCID).then((m) => {
-      setMetadata({ ...m, __cid: metadataCID });
-    }).catch(() => {});
-  }, [data]);
+    fetchMetadata(metadataCID)
+      .then((m) => {
+        setMetadata({ ...m, __cid: metadataCID, error: false });
+      })
+      .catch((err) => {
+        console.error("fetchMetadata failed for", metadataCID, err);
+        setMetadata({ 
+          name: "Untitled Auction", 
+          description: "Metadata unavailable. Could not load auction details from IPFS.", 
+          image: null, 
+          __cid: metadataCID,
+          error: true 
+        });
+      });
+  }, [data, metadata?.__cid]);
 
   if (!data) return { isLoading, isError, refetch };
 
@@ -261,8 +279,9 @@ export function useAuction(auctionId) {
     metadataCID, seller, highestBid, highestBidder, deadline, ended, numBidders,
     name:        metadata?.name        ?? "Loading…",
     description: metadata?.description ?? "",
-    image:       metadata?.image       ?? "",
+    image:       metadata?.image       ?? null,
     condition:   metadata?.condition   ?? "",
+    metadataError: metadata?.error     ?? false,
     fee, minTotal,
     isLoading, isError, refetch,
   };
@@ -286,7 +305,7 @@ export function useSellerStatus() {
     watch:        true,
   });
 
-  const { data: sellerData } = useReadContract({
+  const { data: sellerData, refetch: refetchSeller } = useReadContract({
     address,
     abi:          AUCTION_ABI,
     functionName: "sellers",
@@ -294,19 +313,25 @@ export function useSellerStatus() {
     enabled:      !!address && !!userAddr,
   });
 
-  const { data: regFee } = useReadContract({
+  const { data: regFee, refetch: refetchFee } = useReadContract({
     address,
     abi:          AUCTION_ABI,
     functionName: "sellerRegistrationFee",
     enabled:      !!address,
   });
 
+  useEffect(() => {
+    const refresh = () => { refetchVerified(); refetchSeller(); refetchFee(); };
+    window.addEventListener("auction-updated", refresh);
+    return () => window.removeEventListener("auction-updated", refresh);
+  }, [refetchVerified, refetchSeller, refetchFee]);
+
   return {
     isVerified:   !!isVerified,
     hasPaidFee:   sellerData?.[1] ?? false,
     registeredAt: sellerData?.[2],
     regFee,
-    refetch:      refetchVerified,
+    refetch:      () => { refetchVerified(); refetchSeller(); refetchFee(); },
   };
 }
 
@@ -341,7 +366,7 @@ export function useCreateAuction() {
     try {
       const { uploadAuctionToIPFS } = await import("../utils/ipfs");
       const result = await uploadAuctionToIPFS({ name, description, condition, imageFile });
-      console.log("upload response", result);
+      safeLog("upload response", result);
       metadataCID = result.metadataCID;
       console.log("metadata uri", metadataCID);
     } catch (e) {
@@ -379,13 +404,13 @@ export function usePlaceBid(auctionId) {
   const { data: minTotal } = useReadContract({ address, abi: AUCTION_ABI, functionName: "minimumBidTotal", args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
 
   async function placeBid(bidAmountEth) {
-    console.log("placeBid attempt", { auctionId, bidAmountEth });
+    safeLog("placeBid attempt", { auctionId, bidAmountEth });
     const netBid  = ethers.parseEther(bidAmountEth.toString());
     const feeVal  = fee ?? 0n;
     const total   = netBid + feeVal;
 
     if (minTotal && total < minTotal) {
-      console.error("Bid below minimum total", { total, minTotal });
+      safeError("Bid below minimum total", { total, minTotal });
       throw new Error("Bid below minimum total");
     }
 
@@ -404,12 +429,12 @@ export function useEndAuction() {
 
   return {
     endAuction: async (id) => {
-      console.log("end auction attempt", id);
+      safeLog("end auction attempt", id);
 
       try {
         return await send("endAuction", [BigInt(id)]);
       } catch (e) {
-        console.error("end auction failed", e);
+        safeError("end auction failed", e);
         throw e;
       }
     },
@@ -452,7 +477,7 @@ export function useExtendBySeller() {
   const { send, ...state } = useContractWrite();
   return {
     extendBySeller: async (auctionId, extraSecs) => {
-      console.log("extend attempt", {
+      safeLog("extend attempt", {
         auctionId,
         extraSecs,
       });
@@ -460,7 +485,7 @@ export function useExtendBySeller() {
       try {
         return await send("extendBySeller", [BigInt(auctionId), BigInt(extraSecs)]);
       } catch (e) {
-        console.error("extend failed", e);
+        safeError("extend failed", e);
         throw e;
       }
     },
@@ -477,16 +502,88 @@ export function useAdminPanel() {
   const address              = getContractAddress(chainId);
   const { address: userAddr } = useAccount();
   const { send, ...state }   = useContractWrite();
+  const publicClient         = usePublicClient();
 
   const { data: ownerAddr }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "owner",           enabled: !!address });
-  const { data: accumulated } = useReadContract({ address, abi: AUCTION_ABI, functionName: "accumulatedFees", enabled: !!address, watch: true });
+  const { data: accumulated, refetch: refetchAcc } = useReadContract({ address, abi: AUCTION_ABI, functionName: "accumulatedFees", enabled: !!address, watch: true });
 
-  const isAdmin = userAddr && ownerAddr && userAddr.toLowerCase() === ownerAddr.toLowerCase();
+  const [pendingSellers, setPendingSellers] = useState([]);
+  const [isEventsLoading, setIsEventsLoading] = useState(false);
+  const [logsError, setLogsError] = useState(null);
+  const lastFetchRef = useRef(0);
+
+  const isAdmin = userAddr && ownerAddr && String(userAddr).toLowerCase() === String(ownerAddr).toLowerCase();
+
+  const fetchPendingSellers = useCallback(async () => {
+    if (!address || !publicClient || !isAdmin) return;
+    
+    setIsEventsLoading(true);
+    setLogsError(null);
+    try {
+      // Direct contract read: get total count of registration attempts
+      const count = await publicClient.readContract({
+        address,
+        abi: AUCTION_ABI,
+        functionName: 'getRegisteredSellersCount'
+      });
+
+      // Fetch all addresses that attempted registration
+      const addrs = await Promise.all(
+        Array.from({ length: Number(count) }, (_, i) => 
+          publicClient.readContract({
+            address,
+            abi: AUCTION_ABI,
+            functionName: 'registeredSellers',
+            args: [BigInt(i)]
+          })
+        )
+      );
+
+      // Deduplicate addresses
+      const uniqueAddrs = [...new Set(addrs)];
+      
+      // Filter for those who are NOT yet verified
+      const sellerStatuses = await Promise.all(
+        uniqueAddrs.map(async (addr) => {
+          const isVerified = await publicClient.readContract({
+            address,
+            abi: AUCTION_ABI,
+            functionName: 'isVerifiedSeller',
+            args: [addr]
+          });
+          return { addr, isVerified };
+        })
+      );
+
+      setPendingSellers(sellerStatuses.filter(s => !s.isVerified).map(s => s.addr));
+    } catch (e) {
+      console.error("Failed to fetch pending sellers:", e);
+      setLogsError("Failed to synchronize curation requests.");
+    } finally {
+      setIsEventsLoading(false);
+    }
+  }, [address, publicClient, isAdmin]);
+
+  useEffect(() => {
+    fetchPendingSellers();
+  }, [fetchPendingSellers]);
+
+  useEffect(() => {
+    const refresh = () => {
+      refetchAcc();
+      fetchPendingSellers(); 
+    };
+    window.addEventListener("auction-updated", refresh);
+    return () => window.removeEventListener("auction-updated", refresh);
+  }, [refetchAcc, fetchPendingSellers]);
 
   return {
     isAdmin,
     ownerAddr,
     accumulated,
+    pendingSellers,
+    isEventsLoading,
+    logsError,
     verifySeller:  (addr)             => send("verifySeller",  [addr]),
     revokeSeller:  (addr)             => send("revokeSeller",  [addr]),
     updateFees:    (sellerFee, buyerFee) => send("updateFees", [ethers.parseEther(sellerFee.toString()), ethers.parseEther(buyerFee.toString())]),

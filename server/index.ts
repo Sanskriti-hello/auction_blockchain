@@ -9,12 +9,7 @@ const app = express();
 const port = Number(process.env.PORT || 3001);
 const frontendUrl = process.env.FRONTEND_URL;
 const pinataJwt = process.env.JWT_TOKEN || process.env.PINATA_JWT || process.env.VITE_PINATA_JWT;
-const pinataGateway = process.env.PINATA_GATEWAY_URL || "https://gateway.pinata.cloud/ipfs";
-const fallbackGateways = [
-  pinataGateway,
-  "https://cloudflare-ipfs.com/ipfs",
-  "https://ipfs.io/ipfs",
-];
+const DEDICATED_GATEWAY = "https://jade-fancy-earwig-731.mypinata.cloud/ipfs";
 
 if (!pinataJwt) {
   console.warn("Pinata JWT is not configured. IPFS routes will fail until JWT_TOKEN or PINATA_JWT is set.");
@@ -42,10 +37,26 @@ function requirePinataJwt() {
 }
 
 function extractCid(uri: string) {
+  if (!uri || typeof uri !== "string") {
+    throw new Error("Invalid CID/URI provided");
+  }
+
   const value = uri.trim();
 
   if (!value) {
     throw new Error("CID is required.");
+  }
+
+  // Handle full HTTP URLs if they somehow get passed
+  if (value.startsWith("http")) {
+    try {
+      const url = new URL(value);
+      if (url.pathname.includes("/ipfs/")) {
+        return url.pathname.split("/ipfs/")[1].split("/")[0];
+      }
+    } catch {
+      // Not a valid URL, continue with CID parsing
+    }
   }
 
   if (value.startsWith("ipfs://")) {
@@ -127,34 +138,88 @@ async function uploadMetadataToIPFS(metadata: Record<string, unknown>) {
   return `ipfs://${data.IpfsHash}`;
 }
 
-async function fetchFromGateway(cidOrUri: string) {
-  const cid = extractCid(cidOrUri);
-  const errors: string[] = [];
-  console.log("fetchFromGateway input", { cidOrUri, cid });
+async function fetchFromGateway(cidOrUri: string, retries = 3) {
+  let cid: string;
+  try {
+    cid = extractCid(cidOrUri);
+  } catch (e) {
+    throw new Error(`Invalid IPFS reference: ${cidOrUri}`);
+  }
 
-  for (const gateway of fallbackGateways) {
-    const url = `${gateway.replace(/\/+$/, "")}/${cid}`;
+  const errors: any[] = [];
+  const url = `${DEDICATED_GATEWAY.replace(/\/+$/, "")}/${cid}`;
+  
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
     try {
-      const response = await fetch(url);
+      console.log(`[IPFS] Fetching ${cid} from Dedicated Gateway (attempt ${attempt}/${retries})...`);
+      console.log(`[IPFS] URL: ${url}`);
+      
+      const response = await fetch(url, { 
+        signal: controller.signal,
+        headers: {
+          "Accept": "application/json, image/*, */*"
+        }
+      });
+
+      clearTimeout(timeout);
 
       if (!response.ok) {
-        const details = await response.text();
-        errors.push(`${url}: ${details || `status ${response.status}`}`);
+        const errorText = await response.text().catch(() => "No error body");
+        console.warn(`[IPFS] Gateway returned ${response.status} for ${cid}: ${errorText}`);
+        errors.push({ attempt, status: response.status, message: errorText });
+        
+        // If it's a 404, maybe don't retry as much or at all, but following retry logic
         continue;
       }
 
+      console.log(`[IPFS] Successfully fetched ${cid} from dedicated gateway`);
       return response;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      errors.push(`${url}: ${message}`);
+    } catch (error: any) {
+      clearTimeout(timeout);
+      const message = error.name === 'AbortError' ? 'Timeout after 15s' : error.message;
+      console.warn(`[IPFS] Dedicated Gateway failed for ${cid}: ${message}`);
+      errors.push({ attempt, error: message });
+    }
+    
+    if (attempt < retries) {
+      const delay = Math.pow(2, attempt) * 1000;
+      console.log(`[IPFS] Dedicated Gateway failed for ${cid}. Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 
-  throw new Error(errors.join(" | ") || "Gateway request failed");
+  throw new Error(`Failed to fetch CID ${cid} from dedicated gateway after ${retries} attempts. Errors: ${JSON.stringify(errors)}`);
 }
 
-app.get("/", (_req: Request, res: Response) => {
-  res.json({ ok: true, service: "auction-backend" });
+app.get("/debug/ipfs/:cid", async (req: Request, res: Response) => {
+  const cid = req.params.cid;
+  const results: any[] = [];
+  
+  const url = `${DEDICATED_GATEWAY.replace(/\/+$/, "")}/${cid}`;
+  try {
+    const start = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    const duration = Date.now() - start;
+    
+    results.push({
+      gateway: DEDICATED_GATEWAY,
+      status: response.status,
+      ok: response.ok,
+      contentType: response.headers.get("content-type"),
+      duration: `${duration}ms`
+    });
+  } catch (err: any) {
+    results.push({ gateway: DEDICATED_GATEWAY, error: err.message });
+  }
+  
+  res.json({ cid, results });
 });
 
 app.post("/create-auction", upload.single("image"), async (req: Request, res: Response) => {
@@ -173,14 +238,28 @@ app.post("/create-auction", upload.single("image"), async (req: Request, res: Re
       return res.status(400).json({ error: "Name and description are required" });
     }
 
+    console.log("[CreateAuction] Uploading image...");
     const imageCID = await uploadImageToIPFS(req.file);
-    const metadataCID = await uploadMetadataToIPFS({
-      name,
-      description,
-      condition: condition || "",
+    
+    const metadata = {
+      name: name.trim(),
+      description: description.trim(),
+      condition: (condition || "").trim(),
       image: imageCID,
-    });
-    console.log("create-auction cids", { imageCID, metadataCID });
+    };
+    
+    console.log("[CreateAuction] Metadata to upload:", JSON.stringify(metadata, null, 2));
+    const metadataCID = await uploadMetadataToIPFS(metadata);
+    
+    console.log("[CreateAuction] Verifying integrity of metadata CID:", metadataCID);
+    try {
+      // Immediate verification to ensure Pinata hasn't returned a CID that it can't serve
+      const verifyRes = await fetchFromGateway(metadataCID, 2);
+      const verifyJson = await verifyRes.json();
+      console.log("[CreateAuction] Integrity check passed:", verifyJson);
+    } catch (vErr) {
+      console.warn("[CreateAuction] Integrity check failed/delayed, but continuing:", vErr instanceof Error ? vErr.message : String(vErr));
+    }
 
     return res.json({ metadataCID, imageCID });
   } catch (error) {
@@ -191,46 +270,55 @@ app.post("/create-auction", upload.single("image"), async (req: Request, res: Re
 });
 
 app.get("/metadata", async (req: Request, res: Response) => {
+  const cid = String(req.query.cid || "");
   try {
-    const cid = String(req.query.cid || "");
-    console.log("metadata request", { cid });
-    const response = await fetchFromGateway(cid);
-    const contentType = response.headers.get("content-type") || "";
-
-    if (!contentType.toLowerCase().includes("application/json")) {
-      const body = await response.text();
-      throw new Error(`Metadata response was not JSON (${contentType || "unknown content type"}): ${body.slice(0, 200)}`);
+    if (!cid || cid === "undefined" || cid === "null") {
+      return res.status(400).json({ error: "Valid CID is required" });
     }
 
+    console.log("[Metadata] Request for:", cid);
+    const response = await fetchFromGateway(cid);
+    
+    // Some gateways might return text/plain for JSON
     const metadata = await response.json();
+    
+    if (typeof metadata !== 'object' || metadata === null) {
+      throw new Error("Metadata response was not a valid JSON object");
+    }
+
     return res.json(metadata);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Metadata fetch failed";
-    console.error("metadata fetch failed:", message);
-    return res.status(500).json({ error: "Metadata fetch failed", details: message });
+    console.error(`[Metadata] Failed for ${cid}:`, message);
+    
+    return res.status(502).json({ 
+      error: "IPFS Gateway Error", 
+      details: message,
+      cid: cid 
+    });
   }
 });
 
 app.get("/auction-image", async (req: Request, res: Response) => {
+  const cid = String(req.query.cid || "");
   try {
-    const cid = String(req.query.cid || "");
+    if (!cid || cid === "undefined" || cid === "null") {
+       return res.status(400).json({ error: "Valid CID is required" });
+    }
+
     const response = await fetchFromGateway(cid);
     const contentType = response.headers.get("content-type");
     const contentLength = response.headers.get("content-length");
+    
+    if (contentType) res.setHeader("Content-Type", contentType);
+    if (contentLength) res.setHeader("Content-Length", contentLength);
+    
     const arrayBuffer = await response.arrayBuffer();
-
-    if (contentType) {
-      res.setHeader("Content-Type", contentType);
-    }
-    if (contentLength) {
-      res.setHeader("Content-Length", contentLength);
-    }
-
     return res.send(Buffer.from(arrayBuffer));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Image fetch failed";
-    console.error("auction-image failed:", message);
-    return res.status(500).json({ error: "Image fetch failed", details: message });
+    console.error(`[Image] Failed for ${cid}:`, message);
+    return res.status(502).json({ error: "Image fetch failed", details: message });
   }
 });
 

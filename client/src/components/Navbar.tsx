@@ -1,48 +1,66 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { Gavel, Menu, X } from 'lucide-react';
+import { Gavel, Menu, X, Shield, UserCircle } from 'lucide-react';
+import { useAdminPanel, useSellerStatus } from '@/hooks/UseAuction';
 
-export function Navbar() {
+interface NavbarProps {
+  onOpenSeller: () => void;
+  onOpenAdmin: () => void;
+  onOpenCreate: () => void;
+}
+
+export function Navbar({ onOpenSeller, onOpenAdmin, onOpenCreate }: NavbarProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const admin = useAdminPanel();
+  const seller = useSellerStatus();
 
   return (
     <nav
-      className="fixed top-0 left-0 right-0 z-50 px-4 py-4"
+      className="fixed top-0 left-0 right-0 z-50 px-6 py-6"
       style={{
-        background: 'rgba(255, 255, 255, 0.05)',
-        backdropFilter: 'blur(6px)',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.15)',
+        background: 'rgba(0, 0, 0, 0.4)',
+        backdropFilter: 'blur(20px)',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
       }}
     >
       <div className="max-w-7xl mx-auto flex items-center justify-between">
         {/* Logo */}
-        <div className="flex items-center gap-2">
-          <div
-            className="p-2 rounded-full"
-            style={{
-              background: 'rgba(255, 255, 255, 0.1)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-            }}
-          >
-            <Gavel className="w-5 h-5 text-white" />
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
           </div>
-          <span className="text-white font-heading italic text-lg">Auction</span>
+          <span className="text-white font-heading italic text-2xl tracking-tighter cursor-pointer" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>Aether<span className="text-emerald-500">.</span></span>
         </div>
 
         {/* Desktop Menu */}
         <div className="hidden md:flex items-center gap-8">
-          <a href="#explore" className="text-white/60 hover:text-white transition-colors text-sm">
+          <a href="#explore" className="text-white/60 hover:text-white transition-colors text-sm font-body">
             Explore
           </a>
-          <a href="#create" className="text-white/60 hover:text-white transition-colors text-sm">
-            Create
-          </a>
-          <a href="#bids" className="text-white/60 hover:text-white transition-colors text-sm">
-            My Bids
-          </a>
-          <a href="#dashboard" className="text-white/60 hover:text-white transition-colors text-sm">
-            Dashboard
-          </a>
+          <button 
+            onClick={onOpenCreate}
+            className="text-white/60 hover:text-white transition-colors text-sm font-body"
+          >
+            Curate
+          </button>
+          
+          <button 
+            onClick={onOpenSeller}
+            className="flex items-center gap-2 text-white/60 hover:text-white transition-colors text-sm font-body"
+          >
+            <UserCircle className="w-4 h-4 text-emerald-500/50" />
+            {seller.isVerified ? 'Curator Status' : 'Register'}
+          </button>
+
+          {admin.isAdmin && (
+            <button 
+              onClick={onOpenAdmin}
+              className="flex items-center gap-2 text-white/60 hover:text-white transition-colors text-sm font-body"
+            >
+              <Shield className="w-4 h-4 text-emerald-500/50" />
+              Admin
+            </button>
+          )}
         </div>
 
         {/* Wallet Button */}
@@ -68,18 +86,29 @@ export function Navbar() {
             border: '1px solid rgba(255, 255, 255, 0.15)',
           }}
         >
-          <a href="#explore" className="block text-white/60 hover:text-white text-sm py-2">
+          <a href="#explore" className="block text-white/60 hover:text-white text-sm py-2 font-body" onClick={() => setIsMenuOpen(false)}>
             Explore
           </a>
-          <a href="#create" className="block text-white/60 hover:text-white text-sm py-2">
-            Create
-          </a>
-          <a href="#bids" className="block text-white/60 hover:text-white text-sm py-2">
-            My Bids
-          </a>
-          <a href="#dashboard" className="block text-white/60 hover:text-white text-sm py-2">
-            Dashboard
-          </a>
+          <button 
+            onClick={() => { onOpenCreate(); setIsMenuOpen(false); }}
+            className="block w-full text-left text-white/60 hover:text-white text-sm py-2 font-body"
+          >
+            Curate
+          </button>
+          <button 
+            onClick={() => { onOpenSeller(); setIsMenuOpen(false); }}
+            className="block w-full text-left text-white/60 hover:text-white text-sm py-2 font-body"
+          >
+            {seller.isVerified ? 'Curator Status' : 'Register'}
+          </button>
+          {admin.isAdmin && (
+            <button 
+              onClick={() => { onOpenAdmin(); setIsMenuOpen(false); }}
+              className="block w-full text-left text-white/60 hover:text-white text-sm py-2 font-body"
+            >
+              Admin
+            </button>
+          )}
         </div>
       )}
     </nav>

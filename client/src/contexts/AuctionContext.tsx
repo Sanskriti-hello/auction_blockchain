@@ -70,9 +70,9 @@ export function AuctionProvider({ children }: { children: ReactNode }) {
 
       return {
         id: String(auction.id),
-        title: auction.name ?? `Auction #${auction.id}`,
-        description: auction.description ?? "Metadata unavailable",
-        image: auction.image ?? "",
+        title: auction.name || `Auction #${auction.id}`,
+        description: auction.description || "Description unavailable",
+        image: auction.image ? ipfsImageUrl(auction.image) : "",
         startingBid: currentBid / 1e18,
         currentBid: currentBid / 1e18,
         highestBidder,

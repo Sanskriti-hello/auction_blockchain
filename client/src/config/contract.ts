@@ -6,7 +6,7 @@
 import auctionArtifact from "../../../out/Auction.sol/Auction.json";
 export const CONTRACT_ADDRESSES: Record<number, string> = {
   31337:    "0x5FbDB2315678afecb367f032d93F642f64180aa3", // default first Anvil deploy
-  11155111: "0xYOUR_SEPOLIA_ADDRESS",                    // fill after Sepolia deploy
+  11155111: "0x4a641beFf9D6E08729c5878C8d629470Eb768926",                   // fill after Sepolia deploy
   1:        "0xYOUR_MAINNET_ADDRESS",                    // fill after mainnet deploy
 };
 

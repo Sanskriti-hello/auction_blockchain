@@ -1,0 +1,7 @@
+{
+  "transactions": [
+    {
+      "rpc": "https://blockchain.googleapis.com/v1/projects/project-disco-485819/locations/asia-east1/endpoints/ethereum-sepolia/rpc?key=AIzaSyDQxTyIMlFKJllbb60YItMFHp7C6GQvrqQ"
+    }
+  ]
+}

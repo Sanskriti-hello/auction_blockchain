@@ -11,8 +11,10 @@ import {
 } from "@tanstack/react-query";
 
 import { WagmiProvider } from "wagmi";
-
 import { wagmiConfig } from "./config/wagmi";
+import { AuctionProvider } from "./contexts/AuctionContext";
+import { Web3Provider } from "./contexts/Web3Context";
+import { ThemeProvider } from "./contexts/ThemeContext";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -34,7 +36,13 @@ export function Providers({
           theme={darkTheme()}
           showRecentTransactions={false}
         >
-          {children}
+          <ThemeProvider defaultTheme="dark">
+            <Web3Provider>
+              <AuctionProvider>
+                {children}
+              </AuctionProvider>
+            </Web3Provider>
+          </ThemeProvider>
         </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>

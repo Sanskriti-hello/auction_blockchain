@@ -134,7 +134,8 @@ function AuctionActionRow({
   onOpen: () => void;
   mode: 'seller' | 'bidder' | 'viewer';
 }) {
-  const { deadline, ended, pendingAmount, isLoading } = useAuction(auctionId);
+  const { address: connectedAddr } = useWeb3();
+  const { deadline, ended, seller, highestBidder, pendingAmount, isLoading } = useAuction(auctionId);
   const { endAuction, isPending: isEndPending, error: endError } = useEndAuction();
   const { withdrawBid, isPending: isWithdrawPending, error: withdrawError } = useWithdrawBid(auctionId);
   const { extendBySeller, isPending: isExtendPending, error: extendError } = useExtendBySeller();
@@ -142,8 +143,24 @@ function AuctionActionRow({
   const isPending = isEndPending || isWithdrawPending || isExtendPending;
   const error = endError || withdrawError || extendError;
 
-  const auctionStatus = ended ? 'ended' : 'active';
+  const isSeller = useMemo(() => {
+    return connectedAddr && seller && String(connectedAddr).toLowerCase() === String(seller).toLowerCase();
+  }, [connectedAddr, seller]);
+
+  const isHighestBidder = useMemo(() => {
+    return connectedAddr && highestBidder && String(connectedAddr).toLowerCase() === String(highestBidder).toLowerCase();
+  }, [connectedAddr, highestBidder]);
+
+  const isExpired = useMemo(() => {
+    if (!deadline) return false;
+    return Number(deadline) <= Math.floor(Date.now() / 1000);
+  }, [deadline]);
+
+  const isActuallyEnded = !!(ended || isExpired);
   const auctionEndTime = Number(deadline) * 1000;
+  
+  const canEnd = !ended && isExpired;
+  const canWithdraw = connectedAddr && !isSeller && !isHighestBidder && (pendingAmount ?? 0n) > 0n;
 
   return (
     <div
@@ -154,13 +171,13 @@ function AuctionActionRow({
       }}
     >
       <div className="flex items-center gap-4">
-        <img src={image} alt={title} className="w-16 h-16 rounded-lg object-cover bg-black" />
+        <img src={image} alt={title} className={`w-16 h-16 rounded-lg object-cover bg-black ${isActuallyEnded ? 'grayscale opacity-40' : ''}`} />
         <div>
-          <h3 className="text-white font-heading italic text-lg">{title}</h3>
+          <h3 className={`font-heading italic text-lg ${isActuallyEnded ? 'text-white/60' : 'text-white'}`}>{title}</h3>
           <p className="text-white/60 text-sm font-body">{subtitle}</p>
-          {!isLoading && (
+          {!isLoading && (pendingAmount ?? 0n) > 0n && (
             <p className="text-white/40 text-xs font-body mt-1">
-              Pending withdrawal: {formatEthShort(pendingAmount)}
+              {canWithdraw ? `Pending withdrawal: ${formatEthShort(pendingAmount)}` : `Funds locked: ${formatEthShort(pendingAmount)}`}
             </p>
           )}
           {error && <p className="text-red-200 text-xs font-body mt-2">{error}</p>}
@@ -178,43 +195,48 @@ function AuctionActionRow({
 
         {mode === 'seller' && (
           <>
-            <button
-              onClick={() => void endAuction(auctionId)}
-              disabled={isPending || isLoading || auctionStatus !== 'active' || auctionEndTime > Date.now()}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
-              style={{
-                background: 'rgba(255, 255, 255, 0.1)',
-                border: '1px solid rgba(255, 255, 255, 0.2)',
-              }}
-            >
-              End
-            </button>
-            <button
-              onClick={() => void extendBySeller(auctionId, 3600)}
-              disabled={isPending || isLoading || auctionStatus !== 'active'}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50 flex items-center gap-2"
-              style={{
-                background: 'rgba(255, 255, 255, 0.08)',
-                border: '1px solid rgba(255, 255, 255, 0.2)',
-              }}
-            >
-              <RefreshCw className="w-4 h-4" />
-              Extend 1h
-            </button>
+            {canEnd && (
+              <button
+                onClick={() => void endAuction(auctionId)}
+                disabled={isPending || isLoading}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.1)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                }}
+              >
+                {isEndPending ? 'Processing...' : 'End Auction'}
+              </button>
+            )}
+            
+            {!isActuallyEnded && Date.now() < auctionEndTime && (
+              <button
+                onClick={() => void extendBySeller(auctionId, 3600)}
+                disabled={isPending || isLoading}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50 flex items-center gap-2"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                }}
+              >
+                <RefreshCw className="w-4 h-4" />
+                {isExtendPending ? 'Extending...' : 'Extend 1h'}
+              </button>
+            )}
           </>
         )}
 
-        {(mode === 'seller' || mode === 'bidder') && (
+        {canWithdraw && (
           <button
             onClick={() => void withdrawBid()}
-            disabled={isPending || isLoading || (pendingAmount ?? 0n) <= 0n}
+            disabled={isPending || isLoading}
             className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
             style={{
               background: 'rgba(255, 255, 255, 0.08)',
               border: '1px solid rgba(255, 255, 255, 0.2)',
             }}
           >
-            Withdraw
+            {isWithdrawPending ? 'Withdrawing...' : 'Withdraw'}
           </button>
         )}
       </div>

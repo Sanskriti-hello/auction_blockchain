@@ -42,40 +42,31 @@ function AnimatedCounter({ target, suffix }: { target: number; suffix: string })
 
 export function Stats() {
   return (
-    <section className="py-20 px-4 bg-black">
-      <div className="max-w-7xl mx-auto">
-        {/* Section Header */}
-        <div className="text-center mb-16">
-          <h2 className="text-4xl md:text-5xl font-heading italic text-white mb-4">
-            Platform Statistics
-          </h2>
-          <p className="text-white/60 font-body text-lg">
-            Real-time metrics from our decentralized auction network
-          </p>
-        </div>
-
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {STATS.map((stat, idx) => (
-            <motion.div
-              key={idx}
-              initial={{ opacity: 0, scale: 0.8 }}
-              whileInView={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.5, delay: idx * 0.1 }}
-              className="p-8 rounded-xl text-center"
-              style={{
-                background: 'rgba(255, 255, 255, 0.05)',
-                border: '1px solid rgba(255, 255, 255, 0.15)',
-                backdropFilter: 'blur(6px)',
-              }}
-            >
-              <p className="text-white/60 font-body text-sm mb-3">{stat.label}</p>
-              <p className="text-5xl font-heading italic text-white">
-                <AnimatedCounter target={stat.value} suffix={stat.suffix} />
-              </p>
-            </motion.div>
-          ))}
-        </div>
+    <section className="bg-white text-black py-16 px-4 overflow-hidden relative border-y border-white/5">
+      <div className="max-w-7xl mx-auto flex flex-wrap justify-between items-center gap-12 relative z-10">
+        {STATS.map((stat, idx) => (
+          <motion.div
+            key={idx}
+            initial={{ opacity: 0, y: 10 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: idx * 0.1 }}
+            className="flex flex-col"
+          >
+            <span className="text-[0.6rem] uppercase tracking-[0.4em] text-black/40 font-body mb-2">
+              {stat.label}
+            </span>
+            <span className="text-4xl md:text-5xl font-heading italic leading-none">
+              <AnimatedCounter target={stat.value} suffix={stat.suffix} />
+            </span>
+          </motion.div>
+        ))}
+      </div>
+      
+      {/* Subtle scrolling text background */}
+      <div className="absolute top-1/2 -translate-y-1/2 left-0 w-full opacity-[0.03] whitespace-nowrap pointer-events-none select-none">
+        <p className="text-[12rem] font-heading italic animate-scroll">
+          IMMUTABLE / PROVENANCE / SETTLEMENT / IMMUTABLE / PROVENANCE / SETTLEMENT
+        </p>
       </div>
     </section>
   );

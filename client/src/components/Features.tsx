@@ -1,4 +1,3 @@
-import React from 'react';
 import { Lock, Zap, Globe, Wallet } from 'lucide-react';
 import { motion } from 'framer-motion';
 
