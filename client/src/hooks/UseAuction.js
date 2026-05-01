@@ -239,8 +239,14 @@ export function useAuction(auctionId) {
     watch:        true,
   });
 
-  const { data: fee }      = useReadContract({ address, abi: AUCTION_ABI, functionName: "buyerFee",        args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
-  const { data: minTotal } = useReadContract({ address, abi: AUCTION_ABI, functionName: "minimumBidTotal", args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
+  const { data: fee,      refetch: refetchFee }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "buyerFee",        args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
+  const { data: minTotal, refetch: refetchMin }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "minimumBidTotal", args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
+
+  useEffect(() => {
+    const refresh = () => { refetchFee(); refetchMin(); };
+    window.addEventListener("auction-updated", refresh);
+    return () => window.removeEventListener("auction-updated", refresh);
+  }, [refetchFee, refetchMin]);
 
   useEffect(() => {
     const refresh = () => refetch();
@@ -400,8 +406,14 @@ export function usePlaceBid(auctionId) {
   const address = getContractAddress(chainId);
   const { send, ...state } = useContractWrite();
 
-  const { data: fee }      = useReadContract({ address, abi: AUCTION_ABI, functionName: "buyerFee",        args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
-  const { data: minTotal } = useReadContract({ address, abi: AUCTION_ABI, functionName: "minimumBidTotal", args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
+  const { data: fee,      refetch: refetchFee }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "buyerFee",        args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
+  const { data: minTotal, refetch: refetchMin }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "minimumBidTotal", args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
+
+  useEffect(() => {
+    const refresh = () => { refetchFee(); refetchMin(); };
+    window.addEventListener("auction-updated", refresh);
+    return () => window.removeEventListener("auction-updated", refresh);
+  }, [refetchFee, refetchMin]);
 
   async function placeBid(bidAmountEth) {
     safeLog("placeBid attempt", { auctionId, bidAmountEth });
@@ -453,7 +465,7 @@ export function useWithdrawBid(auctionId) {
   const { address: userAddr } = useAccount();
   const { send, ...state }   = useContractWrite();
 
-  const { data: pendingAmount } = useReadContract({
+  const { data: pendingAmount, refetch: refetchPending } = useReadContract({
     address,
     abi:          AUCTION_ABI,
     functionName: "pendingReturns",
@@ -461,6 +473,12 @@ export function useWithdrawBid(auctionId) {
     enabled:      !!address && !!userAddr && auctionId !== undefined,
     watch:        true,
   });
+
+  useEffect(() => {
+    const refresh = () => refetchPending();
+    window.addEventListener("auction-updated", refresh);
+    return () => window.removeEventListener("auction-updated", refresh);
+  }, [refetchPending]);
 
   return {
     withdrawBid:   () => send("withdrawBid", [BigInt(auctionId)]),

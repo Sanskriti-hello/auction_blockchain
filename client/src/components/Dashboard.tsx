@@ -140,6 +140,15 @@ function AuctionActionRow({
   const { withdrawBid, isPending: isWithdrawPending, error: withdrawError } = useWithdrawBid(auctionId);
   const { extendBySeller, isPending: isExtendPending, error: extendError } = useExtendBySeller();
 
+  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   const isPending = isEndPending || isWithdrawPending || isExtendPending;
   const error = endError || withdrawError || extendError;
 
@@ -153,8 +162,8 @@ function AuctionActionRow({
 
   const isExpired = useMemo(() => {
     if (!deadline) return false;
-    return Number(deadline) <= Math.floor(Date.now() / 1000);
-  }, [deadline]);
+    return Number(deadline) <= now;
+  }, [deadline, now]);
 
   const isActuallyEnded = !!(ended || isExpired);
   const auctionEndTime = Number(deadline) * 1000;

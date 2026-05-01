@@ -60,13 +60,22 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
   const [bidAmount, setBidAmount] = useState('');
   const [timeLeft, setTimeLeft] = useState('');
   const [extensionHours, setExtensionHours] = useState('1');
+  const [isActionPending, setIsActionPending] = useState(false);
+  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const auctionEndTime = Number(deadline || 0) * 1000;
   
   const isExpired = useMemo(() => {
     if (!deadline) return false;
-    return Number(deadline) <= Math.floor(Date.now() / 1000);
-  }, [deadline]);
+    return Number(deadline) <= now;
+  }, [deadline, now]);
 
   const isActuallyEnded = !!(ended || isExpired);
 
@@ -85,12 +94,15 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
   }, [isConnected, isSeller, ended, isExpired]);
 
   const canEnd = useMemo(() => {
-    return !!((isSeller || isAdmin) && !ended && isExpired);
-  }, [isSeller, isAdmin, ended, isExpired]);
+    // Contract has a 15s TIMESTAMP_BUFFER. Wait at least deadline + 16s to be safe.
+    const isBufferedExpired = deadline ? (Number(deadline) + 16 <= now) : false;
+    return !!((isSeller || isAdmin) && !ended && isBufferedExpired);
+  }, [isSeller, isAdmin, ended, deadline, now]);
   
   // Withdraw MUST ONLY appear if: user connected, has pending balance, and is not the current leading bidder of an active auction
   const canWithdraw = useMemo(() => {
-    const hasBalance = (pendingAmount ?? 0n) > 0n;
+    const balance = pendingAmount ?? 0n;
+    const hasBalance = balance > 0n;
     const isLeadingActive = isHighestBidder && !isActuallyEnded;
     return !!(isConnected && hasBalance && !isLeadingActive);
   }, [isConnected, isHighestBidder, isActuallyEnded, pendingAmount]);
@@ -100,21 +112,60 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
   const imageUrl = image ? ipfsImageUrl(image) : null;
 
   const handlePlaceBid = async () => {
-    if (!canBid || !bidAmount) return;
+    if (!canBid || !bidAmount || isActionPending) return;
+    setIsActionPending(true);
     try {
-      const hash = await placeBid(bidAmount);
-      if (hash) setBidAmount('');
+      console.log("PLACE BID DEBUG", { auctionId, bidAmount, connected: address });
+      await placeBid(bidAmount);
+      setBidAmount('');
     } catch (e) {
-      // Error is handled by hook state
+      console.error("Bid failed", e);
+    } finally {
+      setIsActionPending(false);
     }
   };
 
   const handleEndAuction = async () => {
-    if (!auctionId || (!isSeller && !isAdmin)) return;
+    if (!auctionId || (!isSeller && !isAdmin) || isActionPending) {
+      console.warn("End auction blocked", { auctionId, isSeller, isAdmin, isActionPending });
+      return;
+    }
+
+    console.log("END AUCTION DEBUG", {
+      auctionId,
+      isSeller,
+      isAdmin,
+      isExpired,
+      ended,
+      deadline,
+      now,
+      connected: address,
+      seller,
+    });
+
+    setIsActionPending(true);
     try {
-      await endAuction(auctionId);
+      const hash = await endAuction(auctionId);
+      console.log("END TX SUBMITTED", hash);
+      // Hook will dispatch 'auction-updated' which triggers refetches
     } catch (e) {
-      // Handled by state
+      console.error("End auction failed", e);
+    } finally {
+      setIsActionPending(false);
+    }
+  };
+
+  const handleWithdraw = async () => {
+    if (!canWithdraw || isActionPending) return;
+    setIsActionPending(true);
+    try {
+      console.log("WITHDRAW DEBUG", { auctionId, connected: address, amount: pendingAmount?.toString() });
+      await withdrawBid();
+      window.dispatchEvent(new Event("auction-updated"));
+    } catch (e) {
+      console.error("Withdraw failed", e);
+    } finally {
+      setIsActionPending(false);
     }
   };
 
@@ -241,11 +292,11 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
                         />
                         <button
                           onClick={handlePlaceBid}
-                          disabled={isPending}
+                          disabled={isPending || isActionPending}
                           className="w-full py-3 rounded-lg font-medium text-black transition-all duration-300 hover:scale-[1.01] active:scale-95 disabled:opacity-50"
                           style={{ background: 'rgb(255, 255, 255)' }}
                         >
-                          {isPending ? 'Submitting...' : 'Place Bid'}
+                          {isPending || isActionPending ? 'Submitting...' : 'Place Bid'}
                         </button>
                       </div>
                     </>
@@ -278,25 +329,25 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
                     {canEnd && (
                       <button
                         onClick={handleEndAuction}
-                        disabled={isPending}
+                        disabled={isPending || isActionPending}
                         className="w-full py-3 rounded-lg font-medium text-black transition-all duration-300 disabled:opacity-50"
                         style={{ background: 'rgb(255, 255, 255)' }}
                       >
-                        {isPending ? 'Processing...' : 'End Auction'}
+                        {isPending || isActionPending ? 'Processing...' : 'End Auction'}
                       </button>
                     )}
                     
                     {canWithdraw && (
                       <button
-                        onClick={() => void withdrawBid()}
-                        disabled={isPending}
+                        onClick={handleWithdraw}
+                        disabled={isPending || isActionPending || (pendingAmount ?? 0n) === 0n}
                         className="w-full py-3 rounded-lg font-medium text-white transition-all duration-300 disabled:opacity-50"
                         style={{
                           background: 'rgba(255, 255, 255, 0.1)',
                           border: '1px solid rgba(255, 255, 255, 0.2)',
                         }}
                       >
-                        Withdraw {formatEthShort(pendingAmount)}
+                        {isPending || isActionPending ? 'Transferring...' : `Withdraw ${formatEthShort(pendingAmount)}`}
                       </button>
                     )}
 

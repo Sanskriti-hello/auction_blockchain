@@ -11,9 +11,17 @@ interface AuctionCardProps {
 
 export function AuctionCard({ auction, onBid, onClick }: AuctionCardProps) {
   const [timeLeft, setTimeLeft] = useState<string>('');
+  const [now, setNow] = useState(Date.now());
   
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   // An auction is visually "ended" if the contract says so OR if the deadline has passed
-  const isExpired = auction.endTime <= Date.now();
+  const isExpired = auction.endTime <= now;
   const isEnded = auction.status === 'ended' || isExpired;
 
   useEffect(() => {
@@ -23,7 +31,6 @@ export function AuctionCard({ auction, onBid, onClick }: AuctionCardProps) {
     }
 
     const updateTimer = () => {
-      const now = Date.now();
       const diff = auction.endTime - now;
 
       if (diff <= 0) {

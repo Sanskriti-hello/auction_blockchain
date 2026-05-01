@@ -223,6 +223,15 @@ function AuctionDetailPage() {
   const [extendSeconds, setExtendSeconds] = useState("60");
   const [localBidError, setLocalBidError] = useState<string | null>(null);
   const [localExtendError, setLocalExtendError] = useState<string | null>(null);
+  const [isActionPending, setIsActionPending] = useState(false);
+  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const total = useMemo(() => {
     try {
@@ -258,22 +267,37 @@ function AuctionDetailPage() {
     return <PageCard title="Auction">Auction not found or failed to load from chain.</PageCard>;
   }
 
-  const isExpired = Number(auction.deadline) <= Math.floor(Date.now() / 1000);
-  const canEnd = (isSeller || admin.isAdmin) && !auction.ended && (Number(auction.deadline) + 16) <= Math.floor(Date.now() / 1000);
+  const isExpired = Number(auction.deadline) <= now;
+  const isBufferedExpired = Number(auction.deadline) + 16 <= now;
+  const canEnd = (isSeller || admin.isAdmin) && !auction.ended && isBufferedExpired;
   const canWithdraw = connectedAddr && (withdraw.pendingAmount ?? 0n) > 0n && !(isHighestBidder && !auction.ended);
   const canBid = connectedAddr && !isSeller && !auction.ended && !isExpired;
 
   async function submitEndAuction() {
     if (!isSeller && !admin.isAdmin) return;
+    if (isActionPending) return;
+
+    console.log("END AUCTION DEBUG (App)", {
+      auctionId,
+      isSeller,
+      isBufferedExpired,
+      deadline: auction.deadline,
+      now,
+    });
+
+    setIsActionPending(true);
     try {
       await endAuction.endAuction(auctionId);
+      window.dispatchEvent(new Event("auction-updated"));
     } catch (e) {
-      // Handled by state
+      console.error("End auction failed", e);
+    } finally {
+      setIsActionPending(false);
     }
   }
 
   async function submitBid() {
-    if (!canBid) return;
+    if (!canBid || isActionPending) return;
     setLocalBidError(null);
 
     if (!bidAmount) {
@@ -281,17 +305,34 @@ function AuctionDetailPage() {
       return;
     }
 
+    setIsActionPending(true);
     try {
       const netBid = ethers.parseEther(bidAmount);
       const fullAmount = netBid + (bid.fee ?? 0n);
       if (bid.minTotal && fullAmount < bid.minTotal) {
         setLocalBidError(`Minimum total required is ${formatEth(bid.minTotal)}.`);
+        setIsActionPending(false);
         return;
       }
 
       await bid.placeBid(bidAmount);
+      setBidAmount("");
     } catch (error) {
       setLocalBidError(parseContractError(error));
+    } finally {
+      setIsActionPending(false);
+    }
+  }
+
+  async function submitWithdraw() {
+    if (!canWithdraw || isActionPending) return;
+    setIsActionPending(true);
+    try {
+      await withdraw.withdrawBid();
+    } catch (e) {
+       // error handled by hook
+    } finally {
+      setIsActionPending(false);
     }
   }
 
@@ -401,12 +442,12 @@ function AuctionDetailPage() {
          <PageCard title="Finalize Auction">
            <button
              type="button"
-             disabled={endAuction.isPending}
+             disabled={endAuction.isPending || isActionPending}
              onClick={submitEndAuction}
-             className={buttonClassName(endAuction.isPending)}
+             className={buttonClassName(endAuction.isPending || isActionPending)}
            >
 
-              {endAuction.isPending ? "Submitting..." : "End auction"}
+              {endAuction.isPending || isActionPending ? "Submitting..." : "End auction"}
             </button>
             <Feedback error={endAuction.error} success={endAuction.isSuccess} />
           </PageCard>
@@ -417,11 +458,11 @@ function AuctionDetailPage() {
             <p>Pending amount: {formatEth(withdraw.pendingAmount)}</p>
             <button
               type="button"
-              disabled={withdraw.isPending}
-              onClick={() => withdraw.withdrawBid()}
-              className={buttonClassName(withdraw.isPending)}
+              disabled={withdraw.isPending || isActionPending || (withdraw.pendingAmount ?? 0n) === 0n}
+              onClick={submitWithdraw}
+              className={buttonClassName(withdraw.isPending || isActionPending || (withdraw.pendingAmount ?? 0n) === 0n)}
             >
-              {withdraw.isPending ? "Submitting..." : "Withdraw bid"}
+              {withdraw.isPending || isActionPending ? "Submitting..." : "Withdraw bid"}
             </button>
             <Feedback error={withdraw.error} success={withdraw.isSuccess} />
           </PageCard>
