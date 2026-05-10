@@ -6,7 +6,6 @@ import "../src/Auction.sol";
 
 contract DeployAuction is Script {
     function run() external returns (Auction) {
-        // Load private key from environment
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
 
         vm.startBroadcast(deployerPrivateKey);

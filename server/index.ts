@@ -8,11 +8,19 @@ dotenv.config();
 const app = express();
 const port = Number(process.env.PORT || 3001);
 const frontendUrl = process.env.FRONTEND_URL;
-const pinataJwt = process.env.JWT_TOKEN || process.env.PINATA_JWT || process.env.VITE_PINATA_JWT;
-const DEDICATED_GATEWAY = "https://jade-fancy-earwig-731.mypinata.cloud/ipfs";
+const pinataJwt = process.env.PINATA_JWT;
+const GATEWAYS = [
+  "https://jade-fancy-earwig-731.mypinata.cloud/ipfs",
+  "https://ipfs.io/ipfs",
+  "https://cloudflare-ipfs.com/ipfs",
+];
+
+if (process.env.NODE_ENV === "production" && !frontendUrl) {
+  throw new Error("FRONTEND_URL is required in production for CORS.");
+}
 
 if (!pinataJwt) {
-  console.warn("Pinata JWT is not configured. IPFS routes will fail until JWT_TOKEN or PINATA_JWT is set.");
+  console.warn("PINATA_JWT is not configured. IPFS routes will fail until PINATA_JWT is set.");
 }
 
 app.use(
@@ -20,6 +28,7 @@ app.use(
     origin: frontendUrl || true,
   }),
 );
+// express.json limit is 2mb, while multer below allows 10mb for file uploads
 app.use(express.json({ limit: "2mb" }));
 
 const upload = multer({
@@ -112,14 +121,6 @@ async function uploadImageToIPFS(file: Express.Multer.File) {
     }
   );
 
-  if (!response.ok) {
-    const text = await response.text();
-
-    throw new Error(
-      `Pinata upload failed: ${text}`
-    );
-  }
-
   const data = (await response.json()) as { IpfsHash: string };
   console.log("upload image response", data);
   return `ipfs://${data.IpfsHash}`;
@@ -138,7 +139,7 @@ async function uploadMetadataToIPFS(metadata: Record<string, unknown>) {
   return `ipfs://${data.IpfsHash}`;
 }
 
-async function fetchFromGateway(cidOrUri: string, retries = 3) {
+async function fetchFromGateway(cidOrUri: string, retries = 2) {
   let cid: string;
   try {
     cid = extractCid(cidOrUri);
@@ -147,76 +148,76 @@ async function fetchFromGateway(cidOrUri: string, retries = 3) {
   }
 
   const errors: any[] = [];
-  const url = `${DEDICATED_GATEWAY.replace(/\/+$/, "")}/${cid}`;
   
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    try {
-      console.log(`[IPFS] Fetching ${cid} from Dedicated Gateway (attempt ${attempt}/${retries})...`);
-      console.log(`[IPFS] URL: ${url}`);
-      
-      const response = await fetch(url, { 
-        signal: controller.signal,
-        headers: {
-          "Accept": "application/json, image/*, */*"
-        }
-      });
-
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "No error body");
-        console.warn(`[IPFS] Gateway returned ${response.status} for ${cid}: ${errorText}`);
-        errors.push({ attempt, status: response.status, message: errorText });
-        
-        // If it's a 404, maybe don't retry as much or at all, but following retry logic
-        continue;
-      }
-
-      console.log(`[IPFS] Successfully fetched ${cid} from dedicated gateway`);
-      return response;
-    } catch (error: any) {
-      clearTimeout(timeout);
-      const message = error.name === 'AbortError' ? 'Timeout after 15s' : error.message;
-      console.warn(`[IPFS] Dedicated Gateway failed for ${cid}: ${message}`);
-      errors.push({ attempt, error: message });
-    }
+  for (const gatewayBase of GATEWAYS) {
+    const url = `${gatewayBase.replace(/\/+$/, "")}/${cid}`;
     
-    if (attempt < retries) {
-      const delay = Math.pow(2, attempt) * 1000;
-      console.log(`[IPFS] Dedicated Gateway failed for ${cid}. Retrying in ${delay}ms...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+
+      try {
+        console.log(`[IPFS] Fetching ${cid} from ${gatewayBase} (attempt ${attempt}/${retries})...`);
+        
+        const response = await fetch(url, { 
+          signal: controller.signal,
+          headers: {
+            "Accept": "application/json, image/*, */*"
+          }
+        });
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "No error body");
+          console.warn(`[IPFS] Gateway ${gatewayBase} returned ${response.status} for ${cid}: ${errorText}`);
+          errors.push({ gateway: gatewayBase, attempt, status: response.status, message: errorText });
+          continue;
+        }
+
+        console.log(`[IPFS] Successfully fetched ${cid} from ${gatewayBase}`);
+        return response;
+      } catch (error: any) {
+        clearTimeout(timeout);
+        const message = error.name === 'AbortError' ? 'Timeout after 15s' : error.message;
+        console.warn(`[IPFS] Gateway ${gatewayBase} failed for ${cid}: ${message}`);
+        errors.push({ gateway: gatewayBase, attempt, error: message });
+      }
+      
+      if (attempt < retries) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     }
   }
 
-  throw new Error(`Failed to fetch CID ${cid} from dedicated gateway after ${retries} attempts. Errors: ${JSON.stringify(errors)}`);
+  throw new Error(`Failed to fetch CID ${cid} from all gateways. Errors: ${JSON.stringify(errors)}`);
 }
 
 app.get("/debug/ipfs/:cid", async (req: Request, res: Response) => {
   const cid = req.params.cid;
   const results: any[] = [];
   
-  const url = `${DEDICATED_GATEWAY.replace(/\/+$/, "")}/${cid}`;
-  try {
-    const start = Date.now();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    
-    const response = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-    const duration = Date.now() - start;
-    
-    results.push({
-      gateway: DEDICATED_GATEWAY,
-      status: response.status,
-      ok: response.ok,
-      contentType: response.headers.get("content-type"),
-      duration: `${duration}ms`
-    });
-  } catch (err: any) {
-    results.push({ gateway: DEDICATED_GATEWAY, error: err.message });
+  for (const gateway of GATEWAYS) {
+    const url = `${gateway.replace(/\/+$/, "")}/${cid}`;
+    try {
+      const start = Date.now();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+      const duration = Date.now() - start;
+      
+      results.push({
+        gateway: gateway,
+        status: response.status,
+        ok: response.ok,
+        contentType: response.headers.get("content-type"),
+        duration: `${duration}ms`
+      });
+    } catch (err: any) {
+      results.push({ gateway: gateway, error: err.message });
+    }
   }
   
   res.json({ cid, results });
@@ -279,6 +280,11 @@ app.get("/metadata", async (req: Request, res: Response) => {
     console.log("[Metadata] Request for:", cid);
     const response = await fetchFromGateway(cid);
     
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("application/json") && !contentType.includes("text/plain")) {
+      throw new Error(`Unexpected content type: ${contentType}`);
+    }
+
     // Some gateways might return text/plain for JSON
     const metadata = await response.json();
     

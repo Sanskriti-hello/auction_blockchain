@@ -27,7 +27,7 @@ export const wagmiConfig = getDefaultConfig({
 
   transports: {
     [sepolia.id]: http(
-      "https://blockchain.googleapis.com/v1/projects/project-disco-485819/locations/asia-east1/endpoints/ethereum-sepolia/rpc?key=AIzaSyDQxTyIMlFKJllbb60YItMFHp7C6GQvrqQ"
+      "https://eth-sepolia.g.alchemy.com/v2/qlqT0PUfl_SVK-Zi1YOeu"
     ),
 
     [localAnvil.id]: http("http://127.0.0.1:8545"),

@@ -91,7 +91,6 @@ contract Auction is ReentrancyGuard {
     mapping(uint256 => mapping(address => bool))    private _hasBid;
 
     mapping(address => SellerInfo) public sellers;
-    address[]                      public registeredSellers;
 
     uint256 public sellerRegistrationFee = 0.01 ether;
     uint256 public baseBuyerFee          = 0.001 ether;
@@ -143,13 +142,8 @@ contract Auction is ReentrancyGuard {
         if (msg.value < sellerRegistrationFee)   revert InsufficientRegistrationFee();
         sellers[msg.sender].hasPaidFee   = true;
         sellers[msg.sender].registeredAt = block.timestamp;
-        registeredSellers.push(msg.sender);
         accumulatedFees                 += msg.value;
         emit SellerRegistered(msg.sender, msg.value);
-    }
-
-    function getRegisteredSellersCount() external view returns (uint256) {
-        return registeredSellers.length;
     }
 
     function verifySeller(address sellerAddr) external onlyOwner {

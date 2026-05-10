@@ -156,8 +156,8 @@ function AuctionListPage() {
             >
               <div className="aspect-[4/3] bg-white/5 flex items-center justify-center relative overflow-hidden">
                 {(() => {
-                  const isExpired = Number(auction.deadline) <= Math.floor(Date.now() / 1000);
-                  const isActuallyEnded = auction.ended || isExpired;
+                  const isBiddingClosed = Number(auction.deadline) <= Math.floor(Date.now() / 1000);
+                  const isActuallyEnded = auction.ended;
                   return (
                     <>
                       {auction.image ? (
@@ -175,8 +175,8 @@ function AuctionListPage() {
                           <p className="text-[10px] uppercase tracking-widest">No Image</p>
                         </div>
                       )}
-                      <div className={`absolute top-2 right-2 px-2 py-0.5 rounded text-[8px] uppercase tracking-widest font-bold border ${isActuallyEnded ? 'bg-red-500/10 border-red-500/20 text-red-300' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
-                        {isActuallyEnded ? 'Inactive' : 'Live'}
+                      <div className={`absolute top-2 right-2 px-2 py-0.5 rounded text-[8px] uppercase tracking-widest font-bold border ${isActuallyEnded ? 'bg-red-500/10 border-red-500/20 text-red-300' : isBiddingClosed ? 'bg-amber-500/10 border-amber-500/20 text-amber-300' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
+                        {isActuallyEnded ? 'Inactive' : isBiddingClosed ? 'Finalizing' : 'Live'}
                       </div>
                     </>
                   );
@@ -268,7 +268,8 @@ function AuctionDetailPage() {
   }
 
   const isExpired = Number(auction.deadline) <= now;
-  const isBufferedExpired = Number(auction.deadline) + 16 <= now;
+  const isBufferedExpired = Number(auction.deadline) + 15 <= now;
+  const secondsUntilFinalizable = Math.max(0, Number(auction.deadline) + 15 - now);
   const canEnd = (isSeller || admin.isAdmin) && !auction.ended && isBufferedExpired;
   const canWithdraw = connectedAddr && (withdraw.pendingAmount ?? 0n) > 0n && !(isHighestBidder && !auction.ended);
   const canBid = connectedAddr && !isSeller && !auction.ended && !isExpired;
@@ -351,14 +352,15 @@ function AuctionDetailPage() {
     }
   }
 
-  const isActuallyEnded = auction.ended || isExpired;
+  const isActuallyEnded = auction.ended;
+  const isFinalizing = !auction.ended && isExpired;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1.35fr_0.95fr]">
       <PageCard title={auction.name || "Untitled Auction"}>
         <div className="flex flex-wrap items-center gap-3 mb-4">
-          <div className={`px-3 py-1 rounded-full text-[10px] uppercase tracking-widest font-bold border ${isActuallyEnded ? 'bg-red-500/10 border-red-500/20 text-red-300' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
-            {isActuallyEnded ? 'Inactive' : 'Active'}
+          <div className={`px-3 py-1 rounded-full text-[10px] uppercase tracking-widest font-bold border ${isActuallyEnded ? 'bg-red-500/10 border-red-500/20 text-red-300' : isFinalizing ? 'bg-amber-500/10 border-amber-500/20 text-amber-300' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
+            {isActuallyEnded ? 'Inactive' : isFinalizing ? 'Finalizing' : 'Active'}
           </div>
           {auction.metadataError && (
              <div className="px-3 py-1 rounded-full text-[10px] uppercase tracking-widest font-bold border bg-amber-500/10 border-amber-500/20 text-amber-200">
@@ -390,7 +392,7 @@ function AuctionDetailPage() {
           <p>Highest bid: {formatEth(auction.highestBid)}</p>
           <p>Condition: {auction.condition || "Not specified"}</p>
           <p>Deadline: {new Date(Number(auction.deadline) * 1000).toLocaleString()}</p>
-          <p>Status: {isActuallyEnded ? "Ended" : formatCountdown(auction.deadline)}</p>
+          <p>Status: {isActuallyEnded ? "Finalized" : isFinalizing ? (isBufferedExpired ? "Ready to finalize" : `Finalizable in ${secondsUntilFinalizable}s`) : formatCountdown(auction.deadline)}</p>
           <p>Bidders: {String(auction.numBidders)}</p>
           <p className="break-all opacity-40">Metadata: {auction.metadataCID}</p>
         </div>
@@ -422,8 +424,12 @@ function AuctionDetailPage() {
             </>
           ) : (
             <div className="py-4 text-center">
-              {auction.ended || isExpired ? (
-                <p className="text-red-400/80 font-medium uppercase tracking-widest text-sm">Bidding has ended</p>
+              {auction.ended ? (
+                <p className="text-red-400/80 font-medium uppercase tracking-widest text-sm">Auction finalized</p>
+              ) : isExpired ? (
+                <p className="text-amber-300/80 font-medium uppercase tracking-widest text-sm">
+                  {isBufferedExpired ? "Ready to finalize" : `Bidding closed. Finalizable in ${secondsUntilFinalizable}s`}
+                </p>
               ) : isSeller ? (
                 <p className="text-white/40 text-sm">You are the seller of this auction</p>
               ) : !connectedAddr ? (
@@ -462,7 +468,7 @@ function AuctionDetailPage() {
               onClick={submitWithdraw}
               className={buttonClassName(withdraw.isPending || isActionPending || (withdraw.pendingAmount ?? 0n) === 0n)}
             >
-              {withdraw.isPending || isActionPending ? "Submitting..." : "Withdraw bid"}
+              {withdraw.isPending || isActionPending ? "Submitting..." : isSeller ? "Withdraw proceeds" : "Withdraw bid"}
             </button>
             <Feedback error={withdraw.error} success={withdraw.isSuccess} />
           </PageCard>
@@ -557,9 +563,9 @@ function CreateAuctionPage() {
     try {
       await createAuction.createAuction({
         ...form,
-        startingPrice: Number(form.startingPrice),
+        startingPrice: form.startingPrice,
         durationSeconds: Number(form.durationSeconds),
-        minIncrement: Number(form.minIncrement),
+        minIncrement: form.minIncrement,
       });
     } catch (error) {
       setLocalError(parseContractError(error));
@@ -667,6 +673,85 @@ function NotFoundPage() {
   );
 }
 
+function SellerRegistrationPage() {
+  return (
+    <PageCard title="Seller Registration">
+      <div className="max-w-lg mx-auto">
+        <SellerModalContent />
+      </div>
+    </PageCard>
+  );
+}
+
+function SellerModalContent() {
+  const { isConnected } = useAccount();
+  const seller = useSellerStatus() as any;
+  const register = useRegisterAsSeller() as any;
+
+  const handleRegister = async () => {
+    if (!seller.regFee) return;
+    try {
+      await register.register(seller.regFee);
+    } catch (e) {
+      // Error handled by hook state
+    }
+  };
+
+  if (!isConnected) {
+    return <p className="text-white/40 text-center font-body italic py-10">Connect your wallet to proceed with registration.</p>;
+  }
+
+  if (seller.isVerified) {
+    return (
+      <div className="text-center py-10">
+        <p className="text-emerald-400 font-body mb-6">Your curator status is active and verified.</p>
+        <Link
+          href="/create"
+          className={buttonClassName()}
+        >
+          Create Auction
+        </Link>
+      </div>
+    );
+  }
+
+  if (seller.hasPaidFee) {
+    return (
+      <div className="text-center p-10 rounded-2xl bg-emerald-500/5 border border-emerald-500/10">
+        <p className="text-white/80 font-body italic">Registration fee paid. Awaiting network administrator approval.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 py-6">
+      <div className="p-6 rounded-xl bg-white/5 border border-white/10">
+        <h4 className="text-xs uppercase tracking-widest text-emerald-500 font-bold mb-4">Verification Terms</h4>
+        <ul className="text-sm text-white/50 space-y-3">
+          <li>• One-time curation registration fee</li>
+          <li>• Manual review by network administrators</li>
+          <li>• Permanent record of curator provenance</li>
+        </ul>
+      </div>
+
+      <div className="flex items-center justify-between px-2 text-sm">
+        <span className="text-white/40">Network Fee</span>
+        <span className="text-white">{formatEth(seller.regFee)}</span>
+      </div>
+      
+      <button
+        onClick={handleRegister}
+        disabled={register.isPending}
+        className={buttonClassName(register.isPending) + " w-full"}
+      >
+        {register.isPending ? 'Confirming...' : 'Initialize Registration'}
+      </button>
+
+      <Feedback error={register.error} success={register.isSuccess} />
+    </div>
+  );
+}
+
 export default function App() {
   return (
     <Switch>
@@ -677,6 +762,7 @@ export default function App() {
             <Route path="/auctions" component={AuctionListPage} />
             <Route path="/auction/:id" component={AuctionDetailPage} />
             <Route path="/create" component={CreateAuctionPage} />
+            <Route path="/seller" component={SellerRegistrationPage} />
             <Route component={NotFoundPage} />
           </Switch>
         </Shell>

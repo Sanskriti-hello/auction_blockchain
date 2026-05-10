@@ -9,28 +9,28 @@ import { Features } from '@/components/Features';
 import { Stats } from '@/components/Stats';
 import { Footer } from '@/components/Footer';
 import { GeometricBackground } from '@/components/GeometricBackground';
-import { useAuction } from '@/contexts/AuctionContext';
-import { useState, useMemo, cloneElement, type ReactElement, type ReactNode } from 'react';
+import { useState, useMemo, cloneElement, type ReactElement } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, History, Shield, Zap } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { useAuctionList } from '@/hooks/UseAuction';
 
 export default function Home() {
-  const { auctions, selectAuction } = useAuction();
+  const { auctions } = useAuctionList() as { auctions: any[] };
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isSellerOpen, setIsSellerOpen] = useState(false);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
 
   const activeAuctions = useMemo(() => 
-    auctions.filter(a => a.status === 'active').slice(0, 6), 
+    auctions.filter((a) => !a.ended && Number(a.deadline ?? 0) > Math.floor(Date.now() / 1000)).slice(0, 6), 
   [auctions]);
 
   const previousAuctions = useMemo(() => 
-    auctions.filter(a => a.status === 'ended').slice(0, 3), 
+    auctions.filter((a) => a.ended).slice(0, 3), 
   [auctions]);
 
   const handleAuctionSelect = (auctionId: string) => {
-    selectAuction(auctionId);
     setSelectedId(auctionId);
   };
 
@@ -134,8 +134,8 @@ export default function Home() {
               {previousAuctions.map((auction) => (
                 <div key={auction.id} className="group border-l border-white/10 pl-6 py-4 hover:border-emerald-500/50 transition-colors cursor-pointer" onClick={() => handleAuctionSelect(auction.id)}>
                   <p className="text-white/20 font-body text-xs mb-2 italic">Sold</p>
-                  <h3 className="text-xl font-heading italic mb-1 group-hover:text-emerald-500 transition-colors">{auction.title}</h3>
-                  <p className="text-2xl font-heading italic text-white/80">{auction.currentBid} ETH</p>
+                  <h3 className="text-xl font-heading italic mb-1 group-hover:text-emerald-500 transition-colors">{auction.name || `Auction #${auction.id}`}</h3>
+                  <p className="text-2xl font-heading italic text-white/80">{Number(auction.highestBid ?? 0n) / 1e18} ETH</p>
                 </div>
               ))}
             </div>
@@ -182,11 +182,13 @@ export default function Home() {
   );
 }
 
-function FeatureCard({ icon, title, desc }: { icon: ReactNode, title: string, desc: string }) {
+function FeatureCard({ icon, title, desc }: { icon: ReactElement<{ className?: string }>, title: string, desc: string }) {
   return (
     <div className="p-8 rounded-3xl bg-white/[0.02] border border-white/10 backdrop-blur-sm group hover:border-emerald-500/20 transition-colors">
       <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 w-fit mb-6 group-hover:scale-110 transition-transform duration-500">
-        {cloneElement(icon as ReactElement, { className: 'w-6 h-6 text-emerald-500' } as any)}
+        {cloneElement(icon, { 
+          className: cn('w-6 h-6 text-emerald-500', icon.props.className) 
+        })}
       </div>
       <h3 className="text-2xl font-heading italic mb-4">{title}</h3>
       <p className="text-white/40 font-body leading-relaxed">{desc}</p>

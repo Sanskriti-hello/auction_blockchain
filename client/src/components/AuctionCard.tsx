@@ -1,10 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { Gavel, Clock, ImageOff } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { Auction } from '@/contexts/AuctionContext';
+
+export interface AuctionCardAuction {
+  id: string;
+  title: string;
+  image: string;
+  currentBid: number;
+  endTime: number;
+  status: 'active' | 'finalizing' | 'ended';
+}
 
 interface AuctionCardProps {
-  auction: Auction;
+  auction: AuctionCardAuction;
   onBid: () => void;
   onClick: () => void;
 }
@@ -20,13 +28,20 @@ export function AuctionCard({ auction, onBid, onClick }: AuctionCardProps) {
     return () => clearInterval(interval);
   }, []);
 
-  // An auction is visually "ended" if the contract says so OR if the deadline has passed
   const isExpired = auction.endTime <= now;
-  const isEnded = auction.status === 'ended' || isExpired;
+  const isFinalizing = auction.status === 'finalizing' || (auction.status === 'active' && isExpired);
+  const isEnded = auction.status === 'ended';
 
   useEffect(() => {
     if (isEnded) {
-      setTimeLeft(isExpired && auction.status !== 'ended' ? 'Pending Closure' : 'Heritage');
+      setTimeLeft('Heritage');
+      return;
+    }
+
+    if (isFinalizing) {
+      const finalizableAt = auction.endTime + 15000;
+      const diff = finalizableAt - now;
+      setTimeLeft(diff > 0 ? `Finalizable in ${Math.ceil(diff / 1000)}s` : 'Ready to finalize');
       return;
     }
 
@@ -41,16 +56,16 @@ export function AuctionCard({ auction, onBid, onClick }: AuctionCardProps) {
       const days = Math.floor(diff / (1000 * 60 * 60 * 24));
       const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
       const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
 
       if (days > 0) setTimeLeft(`${days}d ${hours}h`);
       else if (hours > 0) setTimeLeft(`${hours}h ${minutes}m`);
-      else setTimeLeft(`${minutes}m`);
+      else if (minutes > 0) setTimeLeft(`${minutes}m ${seconds}s`);
+      else setTimeLeft(`${seconds}s`);
     };
 
     updateTimer();
-    const interval = setInterval(updateTimer, 60000);
-    return () => clearInterval(interval);
-  }, [auction.endTime, isEnded]);
+  }, [auction.endTime, isEnded, isFinalizing, now]);
 
   return (
     <motion.div
@@ -85,8 +100,8 @@ export function AuctionCard({ auction, onBid, onClick }: AuctionCardProps) {
           </div>
         )}
         <div className="absolute top-6 right-6 z-10">
-          <div className={`px-4 py-1.5 rounded-full backdrop-blur-xl border text-[10px] font-medium uppercase tracking-[0.2em] shadow-2xl ${isEnded ? 'bg-red-500/10 border-red-500/20 text-red-300' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
-            {isEnded ? 'Inactive' : 'Live'}
+          <div className={`px-4 py-1.5 rounded-full backdrop-blur-xl border text-[10px] font-medium uppercase tracking-[0.2em] shadow-2xl ${isEnded ? 'bg-red-500/10 border-red-500/20 text-red-300' : isFinalizing ? 'bg-amber-500/10 border-amber-500/20 text-amber-300' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
+            {isEnded ? 'Inactive' : isFinalizing ? 'Finalizing' : 'Live'}
           </div>
         </div>
       </div>
@@ -97,10 +112,10 @@ export function AuctionCard({ auction, onBid, onClick }: AuctionCardProps) {
           <h3 className={`text-2xl font-heading italic truncate max-w-[70%] ${isEnded ? 'text-white/60' : 'text-white'}`}>
             {auction.title}
           </h3>
-          <div className={`flex items-center gap-1.5 ${isEnded ? 'text-red-400/60' : 'text-emerald-500/80'}`}>
-            {!isEnded && <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />}
+          <div className={`flex items-center gap-1.5 ${isEnded ? 'text-red-400/60' : isFinalizing ? 'text-amber-400/80' : 'text-emerald-500/80'}`}>
+            {!isEnded && !isFinalizing && <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />}
             <span className="text-[10px] uppercase tracking-widest font-body">
-              {isEnded ? 'Ended' : 'Active'}
+              {isEnded ? 'Ended' : isFinalizing ? 'Buffer' : 'Active'}
             </span>
           </div>
         </div>
@@ -122,10 +137,10 @@ export function AuctionCard({ auction, onBid, onClick }: AuctionCardProps) {
 
           <div className="text-right">
             <p className="text-[9px] uppercase tracking-[0.2em] text-white/20 font-body mb-3">
-              {isEnded ? 'Closed At' : 'Closing In'}
+              {isEnded ? 'Closed At' : isFinalizing ? 'Settlement' : 'Closing In'}
             </p>
             <div className="flex items-center gap-2 text-white/70 justify-end">
-              {!isEnded && <Clock className="w-3 h-3 text-emerald-500/60" />}
+              {!isEnded && <Clock className={`w-3 h-3 ${isFinalizing ? 'text-amber-400/60' : 'text-emerald-500/60'}`} />}
               <span className="text-sm font-heading italic">{timeLeft}</span>
             </div>
           </div>
@@ -135,7 +150,7 @@ export function AuctionCard({ auction, onBid, onClick }: AuctionCardProps) {
         <div className="relative overflow-hidden rounded-full border border-white/10 group-hover:border-emerald-500/30 transition-colors duration-500">
           <div className="absolute inset-0 bg-white opacity-0 group-hover:opacity-[0.03] transition-opacity" />
           <div className="px-6 py-4 text-center text-[10px] uppercase tracking-[0.3em] font-medium text-white/40 group-hover:text-white transition-colors">
-            {isEnded ? 'View Provenance' : 'Place Offer'}
+            {isEnded ? 'View Provenance' : isFinalizing ? 'Finalize Soon' : 'Place Offer'}
           </div>
         </div>
       </div>

@@ -87,15 +87,17 @@ export function CreateAuction({ isOpen, onClose }: CreateAuctionProps) {
       return;
     }
 
+    const imageFile = form.imageFile;
     setPendingAuctionId(Number(counter));
 
     try {
       await createAuction.createAuction({
         ...form,
+        imageFile,
         title: form.name,
-        startingPrice: Number(form.startingPrice),
+        startingPrice: form.startingPrice,
         durationSeconds: Number(form.durationSeconds),
-        minIncrement: Number(form.minIncrement),
+        minIncrement: form.minIncrement,
       });
     } catch (error) {
       setLocalError(parseContractError(error));

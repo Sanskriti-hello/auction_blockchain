@@ -9,10 +9,30 @@ import { safeLog } from "./safeStringify";
 
 const DEDICATED_GATEWAY = "https://jade-fancy-earwig-731.mypinata.cloud/ipfs";
 
+interface AuctionUploadInput {
+  name: string;
+  description: string;
+  condition?: string;
+  imageFile: File;
+}
+
+interface AuctionUploadResult {
+  metadataCID: string;
+  imageCID: string;
+}
+
+export interface AuctionMetadata {
+  name?: string;
+  description?: string;
+  condition?: string;
+  image?: string | null;
+  [key: string]: unknown;
+}
+
 /**
  * Helper to clean CID and return full dedicated gateway URL
  */
-function getGatewayUrl(cid) {
+function getGatewayUrl(cid: string) {
   if (!cid) return "";
   let cleanCid = cid.toString().trim();
   if (cleanCid.startsWith("ipfs://")) {
@@ -35,7 +55,12 @@ function getGatewayUrl(cid) {
  * @returns {{ metadataCID: string, imageCID: string }}
  *   metadataCID — pass this string directly to createAuction() on-chain
  */
-export async function uploadAuctionToIPFS({ name, description, condition, imageFile }) {
+export async function uploadAuctionToIPFS({
+  name,
+  description,
+  condition,
+  imageFile,
+}: AuctionUploadInput): Promise<AuctionUploadResult> {
   const formData = new FormData();
   formData.append("image",       imageFile);
   formData.append("name",        name);
@@ -49,7 +74,7 @@ export async function uploadAuctionToIPFS({ name, description, condition, imageF
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Upload failed" }));
+    const err = await res.json().catch(() => ({ error: "Upload failed" })) as { error?: string };
     throw new Error(err.error || "IPFS upload failed");
   }
 
@@ -65,7 +90,7 @@ export async function uploadAuctionToIPFS({ name, description, condition, imageF
  * @param {string} cid  — e.g. "ipfs://QmXyz..."
  * @returns {Object}  parsed metadata JSON
  */
-export async function fetchMetadata(cid) {
+export async function fetchMetadata(cid: string): Promise<AuctionMetadata | null> {
   if (!cid) {
     console.warn("fetchMetadata: No CID provided");
     return null;
@@ -89,7 +114,7 @@ export async function fetchMetadata(cid) {
     if (!res.ok) {
       let errorDetails = "";
       try {
-        const errJson = await res.json();
+        const errJson = await res.json() as { details?: string; error?: string };
         errorDetails = errJson.details || errJson.error || "";
       } catch {
         errorDetails = await res.text().catch(() => "Unknown error");
@@ -103,8 +128,8 @@ export async function fetchMetadata(cid) {
     }
 
     return await res.json();
-  } catch (err) {
-    if (err.name === 'AbortError') {
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') {
       console.error(`Metadata fetch timed out for ${cleanCid}`);
       throw new Error("Metadata fetch timed out");
     }
@@ -119,7 +144,7 @@ export async function fetchMetadata(cid) {
  * @param {string} cid  — e.g. "ipfs://QmXyz..."
  * @returns {string} URL
  */
-export function ipfsImageUrl(cid) {
+export function ipfsImageUrl(cid: string | null | undefined): string {
   if (!cid || typeof cid !== 'string' || cid.trim() === "") {
     return "";
   }

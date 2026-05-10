@@ -1,15 +1,28 @@
 import { AuctionCard } from './AuctionCard';
-import { useAuction } from '@/contexts/AuctionContext';
+import { useAuctionList } from '@/hooks/UseAuction';
+import { ipfsImageUrl } from '@/utils/ipfs';
 
 interface AuctionGridProps {
   onAuctionSelect: (auctionId: string) => void;
 }
 
 export function AuctionGrid({ onAuctionSelect }: AuctionGridProps) {
-  const { auctions, isLoading } = useAuction();
+  const { auctions, isLoading } = useAuctionList() as { auctions: any[]; isLoading: boolean };
+  const now = Math.floor(Date.now() / 1000);
 
-  // Filter for active auctions only for the "Current Pulse" grid
-  const activeAuctions = auctions.filter(a => a.status === 'active');
+  const activeAuctions = auctions
+    .filter((auction) => !auction.ended)
+    .map((auction) => {
+      const deadline = Number(auction.deadline ?? 0);
+      return {
+        id: String(auction.id),
+        title: auction.name || `Auction #${auction.id}`,
+        image: auction.image ? ipfsImageUrl(auction.image) : '',
+        currentBid: Number(auction.highestBid ?? 0n) / 1e18,
+        endTime: deadline * 1000,
+        status: deadline <= now ? 'finalizing' as const : 'active' as const,
+      };
+    });
 
   if (isLoading) {
     return (

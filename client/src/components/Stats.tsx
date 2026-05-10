@@ -43,6 +43,9 @@ function AnimatedCounter({ target, suffix }: { target: number; suffix: string })
 export function Stats() {
   return (
     <section className="bg-white text-black py-16 px-4 overflow-hidden relative border-y border-white/5">
+      <div className="max-w-7xl mx-auto flex flex-col items-center mb-8 relative z-10">
+        <p className="text-[10px] uppercase tracking-[0.2em] text-black/30 font-body">Illustrative Network Performance</p>
+      </div>
       <div className="max-w-7xl mx-auto flex flex-wrap justify-between items-center gap-12 relative z-10">
         {STATS.map((stat, idx) => (
           <motion.div

@@ -1,9 +1,9 @@
-import React from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useAuction as useAuctionContext } from '@/contexts/AuctionContext';
 import { useWeb3 } from '@/contexts/Web3Context';
-import { useAuction, useEndAuction, useWithdrawBid, useExtendBySeller } from '@/hooks/UseAuction';
+import { useAuction, useAuctionList, useEndAuction, useWithdrawBid, useExtendBySeller } from '@/hooks/UseAuction';
 import { formatEthShort, shortAddr } from '@/utils/formatters';
+import { ipfsImageUrl } from '@/utils/ipfs';
 import { Gavel, TrendingUp, Trophy, RefreshCw } from 'lucide-react';
 
 interface DashboardProps {
@@ -11,14 +11,22 @@ interface DashboardProps {
 }
 
 export function Dashboard({ onAuctionSelect }: DashboardProps) {
-  const { auctions } = useAuctionContext();
+  const { auctions } = useAuctionList() as { auctions: any[] };
   const { address, isConnected } = useWeb3();
 
   const normalizedAddress = address?.toLowerCase();
-  const myAuctions = auctions.filter((auction) => auction.creator.toLowerCase() === normalizedAddress);
-  const myLeadingBids = auctions.filter((auction) => auction.highestBidder?.toLowerCase() === normalizedAddress);
+  const normalizedAuctions = auctions.map((auction) => ({
+    id: String(auction.id),
+    title: auction.name || `Auction #${auction.id}`,
+    image: auction.image ? ipfsImageUrl(auction.image) : '',
+    currentBid: Number(auction.highestBid ?? 0n) / 1e18,
+    highestBidder: auction.highestBidder,
+    creator: auction.seller || '',
+  }));
+  const myAuctions = normalizedAuctions.filter((auction) => auction.creator.toLowerCase() === normalizedAddress);
+  const myLeadingBids = normalizedAuctions.filter((auction) => auction.highestBidder?.toLowerCase() === normalizedAddress);
   const watchedAuctions = auctions.filter(
-    (auction) => auction.highestBidder?.toLowerCase() !== normalizedAddress && auction.creator.toLowerCase() !== normalizedAddress
+    (auction) => auction.highestBidder?.toLowerCase() !== normalizedAddress && auction.seller?.toLowerCase() !== normalizedAddress
   );
 
   return (
@@ -98,12 +106,12 @@ export function Dashboard({ onAuctionSelect }: DashboardProps) {
                 {watchedAuctions.slice(0, 6).length > 0 ? (
                   watchedAuctions.slice(0, 6).map((auction) => (
                     <AuctionActionRow
-                      key={auction.id}
-                      auctionId={auction.id}
-                      title={auction.title}
-                      image={auction.image}
-                      subtitle={`Seller: ${shortAddr(auction.creator)}`}
-                      onOpen={() => onAuctionSelect(auction.id)}
+                      key={String(auction.id)}
+                      auctionId={String(auction.id)}
+                      title={auction.name || `Auction #${auction.id}`}
+                      image={auction.image ? ipfsImageUrl(auction.image) : ''}
+                      subtitle={`Seller: ${shortAddr(auction.seller)}`}
+                      onOpen={() => onAuctionSelect(String(auction.id))}
                       mode="viewer"
                     />
                   ))
@@ -135,9 +143,9 @@ function AuctionActionRow({
   mode: 'seller' | 'bidder' | 'viewer';
 }) {
   const { address: connectedAddr } = useWeb3();
-  const { deadline, ended, seller, highestBidder, pendingAmount, isLoading } = useAuction(auctionId);
+  const { deadline, ended, seller, highestBidder, isLoading } = useAuction(auctionId);
   const { endAuction, isPending: isEndPending, error: endError } = useEndAuction();
-  const { withdrawBid, isPending: isWithdrawPending, error: withdrawError } = useWithdrawBid(auctionId);
+  const { withdrawBid, pendingAmount, isPending: isWithdrawPending, error: withdrawError } = useWithdrawBid(auctionId);
   const { extendBySeller, isPending: isExtendPending, error: extendError } = useExtendBySeller();
 
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
@@ -165,11 +173,12 @@ function AuctionActionRow({
     return Number(deadline) <= now;
   }, [deadline, now]);
 
-  const isActuallyEnded = !!(ended || isExpired);
+  const isFinalizable = deadline ? Number(deadline) + 15 <= now : false;
+  const isActuallyEnded = !!ended;
   const auctionEndTime = Number(deadline) * 1000;
   
-  const canEnd = !ended && isExpired;
-  const canWithdraw = connectedAddr && !isSeller && !isHighestBidder && (pendingAmount ?? 0n) > 0n;
+  const canEnd = !ended && isFinalizable;
+  const canWithdraw = connectedAddr && !(isHighestBidder && !ended) && (pendingAmount ?? 0n) > 0n;
 
   return (
     <div
@@ -187,6 +196,11 @@ function AuctionActionRow({
           {!isLoading && (pendingAmount ?? 0n) > 0n && (
             <p className="text-white/40 text-xs font-body mt-1">
               {canWithdraw ? `Pending withdrawal: ${formatEthShort(pendingAmount)}` : `Funds locked: ${formatEthShort(pendingAmount)}`}
+            </p>
+          )}
+          {!ended && isExpired && (
+            <p className="text-amber-300/70 text-xs font-body mt-1">
+              {isFinalizable ? 'Ready to finalize' : `Finalizable in ${Math.max(0, Number(deadline) + 15 - now)}s`}
             </p>
           )}
           {error && <p className="text-red-200 text-xs font-body mt-2">{error}</p>}

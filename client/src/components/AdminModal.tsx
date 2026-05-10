@@ -77,7 +77,7 @@ export function AdminModal({ isOpen, onClose }: AdminModalProps) {
                 </div>
               ) : (
                 <div className="max-h-60 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
-                  {admin.pendingSellers.map((addr) => (
+                  {admin.pendingSellers.map((addr: `0x${string}`) => (
                     <div key={addr} className="flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/10">
                       <div className="font-mono text-sm text-white/70">
                         {shortAddr(addr)}

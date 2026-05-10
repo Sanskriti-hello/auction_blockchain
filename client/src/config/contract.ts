@@ -1,27 +1,26 @@
-// client/src/config/contract.ts
-// ─────────────────────────────────────────────────────────────────────────────
-// Update CONTRACT_ADDRESSES after each deploy.
-// Chain IDs: Anvil = 31337 | Sepolia = 11155111 | Mainnet = 1
-// ─────────────────────────────────────────────────────────────────────────────
 import auctionArtifact from "../../../out/Auction.sol/Auction.json";
-export const CONTRACT_ADDRESSES: Record<number, string> = {
-  31337:    "0x5FbDB2315678afecb367f032d93F642f64180aa3", // default first Anvil deploy
-  11155111: "0x4a641beFf9D6E08729c5878C8d629470Eb768926",                   // fill after Sepolia deploy
-  1:        "0xYOUR_MAINNET_ADDRESS",                    // fill after mainnet deploy
-};
 
-export function getContractAddress(chainId: number): `0x${string}` | null {
-  const addr = CONTRACT_ADDRESSES[chainId];
-  if (!addr || addr.startsWith("0xYOUR")) {
-    console.warn(`No contract deployed on chain ${chainId}`);
-    return null;
+export function getContractAddress(chainId?: number): `0x${string}` | null {
+  // Use environment variable for Sepolia or other production-like networks
+  if (chainId === 11155111) {
+    const addr = import.meta.env.VITE_CONTRACT_ADDRESS?.trim();
+    if (!addr) {
+      console.warn("VITE_CONTRACT_ADDRESS is not configured for Sepolia.");
+      return null;
+    }
+    return addr as `0x${string}`;
   }
-  return addr as `0x${string}`;
+
+  // Fallback for Anvil (local testing)
+  if (chainId === 31337) {
+    // Usually local Anvil deployments use a stable address or can be configured via another env var
+    return (import.meta.env.VITE_LOCAL_CONTRACT_ADDRESS || "0x5FbDB2315678afecb367f032d93F642f64180aa3") as `0x${string}`;
+  }
+
+  // Default to the env var if no chainId provided or unknown chain
+  const fallbackAddr = import.meta.env.VITE_CONTRACT_ADDRESS?.trim();
+  return (fallbackAddr as `0x${string}`) || null;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ABI — mirrors Auction.sol exactly
-// ─────────────────────────────────────────────────────────────────────────────
 export const AUCTION_ABI = auctionArtifact.abi;
-// Express backend URL
 export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";

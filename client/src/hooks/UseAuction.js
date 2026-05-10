@@ -13,7 +13,7 @@ import {
   useAccount,
   usePublicClient,
 } from "wagmi";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
 import { AUCTION_ABI, getContractAddress } from "../config/contract";
 import { fetchMetadata }        from "../utils/ipfs";
@@ -35,7 +35,7 @@ function useContractWrite() {
   const { writeContractAsync } = useWriteContract();
 
   const receipt = useWaitForTransactionReceipt({
-    hash: txHash,
+    hash: txHash || undefined,
     query: {
       enabled: !!txHash,
     },
@@ -143,6 +143,46 @@ function useContractWrite() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const metadataCache = new Map();
+const SELLER_REGISTERED_EVENT = {
+  type: "event",
+  name: "SellerRegistered",
+  inputs: [
+    { type: "address", name: "seller", indexed: true },
+    { type: "uint256", name: "feePaid", indexed: false },
+  ],
+};
+
+async function getAllSellerRegisteredLogs({
+  publicClient,
+  contractAddress,
+  event,
+  fromBlock,
+  toBlock,
+}) {
+  const STEP = 10n; // Aggressive chunking for restrictive free-tier RPCs
+  let allLogs = [];
+
+  for (let start = fromBlock; start <= toBlock; start += STEP) {
+    const end = start + STEP - 1n > toBlock ? toBlock : start + STEP - 1n;
+    try {
+      const logs = await publicClient.getLogs({
+        address: contractAddress,
+        event,
+        fromBlock: start,
+        toBlock: end,
+      });
+      allLogs.push(...logs);
+    } catch (err) {
+      console.error(`Failed to fetch logs for block range ${start}-${end}:`, err.message);
+    }
+    
+    // Small delay to prevent rate-limiting on high-frequency requests
+    if (start + STEP <= toBlock) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+  return allLogs;
+}
 
 export function useAuctionList() {
   const chainId = useChainId();
@@ -155,7 +195,9 @@ export function useAuctionList() {
     address,
     abi:          AUCTION_ABI,
     functionName: "auctionCounter",
-    enabled:      !!address,
+    query: {
+      enabled:      !!address,
+    },
     watch:        true,
   });
 
@@ -170,53 +212,79 @@ export function useAuctionList() {
 
   const { data: results, isLoading, refetch: refetchAll } = useReadContracts({
     contracts: auctionCalls,
-    enabled:   !!address && count > 0,
+    query: {
+      enabled:   !!address && count > 0,
+    },
   });
+
+  useEffect(() => {
+    if (!results || count === 0) {
+      setAuctions([]);
+      setEnriched([]);
+      return;
+    }
+
+    const parsed = results
+      .map((entry, id) => {
+        if (!entry || entry.status !== "success" || !entry.result) return null;
+        const [metadataCID, seller, highestBid, highestBidder, deadline, ended, numBidders] = entry.result;
+        return {
+          id,
+          metadataCID,
+          seller,
+          highestBid,
+          highestBidder,
+          deadline,
+          ended,
+          numBidders,
+        };
+      })
+      .filter(Boolean);
+
+    setAuctions(parsed);
+
+    let cancelled = false;
+    Promise.all(
+      parsed.map(async (auction) => {
+        if (!auction.metadataCID) return auction;
+
+        try {
+          if (!metadataCache.has(auction.metadataCID)) {
+            metadataCache.set(auction.metadataCID, fetchMetadata(auction.metadataCID));
+          }
+          const metadata = await metadataCache.get(auction.metadataCID);
+          return { ...auction, ...(metadata || {}), metadataError: false };
+        } catch (err) {
+          console.error("fetchMetadata failed for", auction.metadataCID, err);
+          metadataCache.delete(auction.metadataCID);
+          return {
+            ...auction,
+            name: `Auction #${auction.id}`,
+            description: "Metadata unavailable. Could not load auction details from IPFS.",
+            image: null,
+            metadataError: true,
+          };
+        }
+      })
+    ).then((items) => {
+      if (!cancelled) setEnriched(items);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [results, count]);
+
+  const refetch = useCallback(() => {
+    refetchCounter();
+    refetchAll();
+  }, [refetchCounter, refetchAll]);
 
   useEffect(() => {
     const refresh = () => refetch();
     window.addEventListener("auction-updated", refresh);
     return () => window.removeEventListener("auction-updated", refresh);
-  }, []);
-
-  useEffect(() => {
-    if (!results) return;
-
-    const raw = results
-      .map((r, i) => {
-        if (r.status !== "success") return null;
-        const [metadataCID, seller, highestBid, highestBidder, deadline, ended, numBidders] = r.result;
-        return { id: i, metadataCID, seller, highestBid, highestBidder, deadline, ended, numBidders };
-      })
-      .filter(Boolean);
-
-    setAuctions(raw);
-
-    // Fetch IPFS metadata for each auction in parallel
-    Promise.all(
-      raw.map(async (a) => {
-        try {
-          if (metadataCache.has(a.metadataCID)) {
-            return { ...a, ...metadataCache.get(a.metadataCID) };
-          }
-          console.log("auction list metadata field", a.metadataCID);
-          const meta = await fetchMetadata(a.metadataCID);
-          metadataCache.set(a.metadataCID, meta);
-          return { ...a, ...meta };
-        } catch {
-          return { 
-            ...a, 
-            name: "Untitled Auction", 
-            description: "Metadata unavailable.", 
-            image: null,
-            metadataError: true 
-          };
-        }
-      })
-    ).then(setEnriched);
-  }, [results]);
-
-  function refetch() { refetchCounter(); refetchAll(); }
+  }, [refetch]);
 
   return { auctions: enriched, count, isLoading, refetch };
 }
@@ -235,12 +303,14 @@ export function useAuction(auctionId) {
     abi:          AUCTION_ABI,
     functionName: "getAuction",
     args:         [BigInt(auctionId ?? 0)],
-    enabled:      auctionId !== undefined && !!address,
+    query: {
+      enabled:      auctionId !== undefined && auctionId !== null && !!address,
+    },
     watch:        true,
   });
 
-  const { data: fee,      refetch: refetchFee }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "buyerFee",        args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
-  const { data: minTotal, refetch: refetchMin }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "minimumBidTotal", args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
+  const { data: fee,      refetch: refetchFee }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "buyerFee",        args: [BigInt(auctionId ?? 0)], query: { enabled: !!address && auctionId !== undefined && auctionId !== null }, watch: true });
+  const { data: minTotal, refetch: refetchMin }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "minimumBidTotal", args: [BigInt(auctionId ?? 0)], query: { enabled: !!address && auctionId !== undefined && auctionId !== null }, watch: true });
 
   useEffect(() => {
     const refresh = () => { refetchFee(); refetchMin(); };
@@ -252,7 +322,7 @@ export function useAuction(auctionId) {
     const refresh = () => refetch();
     window.addEventListener("auction-updated", refresh);
     return () => window.removeEventListener("auction-updated", refresh);
-  }, []);
+  }, [refetch]);
 
   useEffect(() => {
     if (!data) return;
@@ -307,7 +377,9 @@ export function useSellerStatus() {
     abi:          AUCTION_ABI,
     functionName: "isVerifiedSeller",
     args:         [userAddr ?? ethers.ZeroAddress],
-    enabled:      !!address && !!userAddr,
+    query: {
+      enabled:      !!address && !!userAddr,
+    },
     watch:        true,
   });
 
@@ -316,14 +388,18 @@ export function useSellerStatus() {
     abi:          AUCTION_ABI,
     functionName: "sellers",
     args:         [userAddr ?? ethers.ZeroAddress],
-    enabled:      !!address && !!userAddr,
+    query: {
+      enabled:      !!address && !!userAddr,
+    },
   });
 
   const { data: regFee, refetch: refetchFee } = useReadContract({
     address,
     abi:          AUCTION_ABI,
     functionName: "sellerRegistrationFee",
-    enabled:      !!address,
+    query: {
+      enabled:      !!address,
+    },
   });
 
   useEffect(() => {
@@ -334,8 +410,8 @@ export function useSellerStatus() {
 
   return {
     isVerified:   !!isVerified,
-    hasPaidFee:   sellerData?.[1] ?? false,
-    registeredAt: sellerData?.[2],
+    hasPaidFee:   (typeof sellerData === 'object' && sellerData !== null && !Array.isArray(sellerData) ? sellerData.hasPaidFee : sellerData?.[1]) ?? false,
+    registeredAt: typeof sellerData === 'object' && sellerData !== null && !Array.isArray(sellerData) ? sellerData.registeredAt : sellerData?.[2],
     regFee,
     refetch:      () => { refetchVerified(); refetchSeller(); refetchFee(); },
   };
@@ -364,7 +440,7 @@ export function useCreateAuction() {
   const [step, setStep]      = useState(null); // "uploading" | "confirming" | null
 
   async function createAuction({ name, description, condition, imageFile, startingPrice, durationSeconds, minIncrement }) {
-    state.reset?.();
+    state.reset();
     setStep("uploading");
 
     // 1. Upload to IPFS via backend
@@ -385,9 +461,9 @@ export function useCreateAuction() {
     setStep("confirming");
     const hash = await send("createAuction", [
       metadataCID,
-      ethers.parseEther(startingPrice.toString()),
+      ethers.parseEther(String(startingPrice)),
       BigInt(durationSeconds),
-      ethers.parseEther(minIncrement.toString()),
+      ethers.parseEther(String(minIncrement)),
     ]);
 
     setStep(null);
@@ -405,9 +481,10 @@ export function usePlaceBid(auctionId) {
   const chainId = useChainId();
   const address = getContractAddress(chainId);
   const { send, ...state } = useContractWrite();
+  const publicClient = usePublicClient();
 
-  const { data: fee,      refetch: refetchFee }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "buyerFee",        args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
-  const { data: minTotal, refetch: refetchMin }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "minimumBidTotal", args: [BigInt(auctionId ?? 0)], enabled: !!address && auctionId !== undefined, watch: true });
+  const { data: fee,      refetch: refetchFee }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "buyerFee",        args: [BigInt(auctionId ?? 0)], query: { enabled: !!address && auctionId !== undefined }, watch: true });
+  const { data: minTotal, refetch: refetchMin }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "minimumBidTotal", args: [BigInt(auctionId ?? 0)], query: { enabled: !!address && auctionId !== undefined }, watch: true });
 
   useEffect(() => {
     const refresh = () => { refetchFee(); refetchMin(); };
@@ -417,16 +494,34 @@ export function usePlaceBid(auctionId) {
 
   async function placeBid(bidAmountEth) {
     safeLog("placeBid attempt", { auctionId, bidAmountEth });
-    const netBid  = ethers.parseEther(bidAmountEth.toString());
-    const feeVal  = fee ?? 0n;
-    const total   = netBid + feeVal;
+    if (!address || !publicClient || auctionId === undefined || auctionId === null) {
+      throw new Error("Contract is not ready for bidding.");
+    }
 
-    if (minTotal && total < minTotal) {
-      safeError("Bid below minimum total", { total, minTotal });
+    const auctionIdBigInt = BigInt(auctionId);
+    const netBid  = ethers.parseEther(String(bidAmountEth));
+    const [liveFee, liveMinTotal] = await Promise.all([
+      publicClient.readContract({
+        address,
+        abi: AUCTION_ABI,
+        functionName: "buyerFee",
+        args: [auctionIdBigInt],
+      }),
+      publicClient.readContract({
+        address,
+        abi: AUCTION_ABI,
+        functionName: "minimumBidTotal",
+        args: [auctionIdBigInt],
+      }),
+    ]);
+    const total   = netBid + liveFee;
+
+    if (liveMinTotal && total < liveMinTotal) {
+      safeError("Bid below live minimum total", { total, liveMinTotal });
       throw new Error("Bid below minimum total");
     }
 
-    return send("placeBid", [BigInt(auctionId)], total);
+    return send("placeBid", [auctionIdBigInt], total);
   }
 
   return { placeBid, fee, minTotal, ...state };
@@ -470,7 +565,9 @@ export function useWithdrawBid(auctionId) {
     abi:          AUCTION_ABI,
     functionName: "pendingReturns",
     args:         [BigInt(auctionId ?? 0), userAddr ?? ethers.ZeroAddress],
-    enabled:      !!address && !!userAddr && auctionId !== undefined,
+    query: {
+      enabled:      !!address && !!userAddr && auctionId !== undefined,
+    },
     watch:        true,
   });
 
@@ -518,69 +615,106 @@ export function useExtendBySeller() {
 export function useAdminPanel() {
   const chainId              = useChainId();
   const address              = getContractAddress(chainId);
-  const { address: userAddr } = useAccount();
+  const { address: userAddr, isConnected } = useAccount();
   const { send, ...state }   = useContractWrite();
   const publicClient         = usePublicClient();
 
-  const { data: ownerAddr }   = useReadContract({ address, abi: AUCTION_ABI, functionName: "owner",           enabled: !!address });
-  const { data: accumulated, refetch: refetchAcc } = useReadContract({ address, abi: AUCTION_ABI, functionName: "accumulatedFees", enabled: !!address, watch: true });
+  const { data: ownerAddr, error: ownerError } = useReadContract({
+    address,
+    abi: AUCTION_ABI,
+    functionName: "owner",
+    query: {
+      enabled: !!address,
+    },
+  });
+
+  const { data: accumulated, refetch: refetchAcc } = useReadContract({
+    address,
+    abi: AUCTION_ABI,
+    functionName: "accumulatedFees",
+    query: {
+      enabled: !!address,
+    },
+    watch: true,
+  });
 
   const [pendingSellers, setPendingSellers] = useState([]);
   const [isEventsLoading, setIsEventsLoading] = useState(false);
   const [logsError, setLogsError] = useState(null);
-  const lastFetchRef = useRef(0);
 
-  const isAdmin = userAddr && ownerAddr && String(userAddr).toLowerCase() === String(ownerAddr).toLowerCase();
+  // Robust admin check: dynamic owner, normalized casing, and chain/connection validation
+  const isAdmin = !!(
+    isConnected && 
+    userAddr && 
+    ownerAddr && 
+    userAddr.toLowerCase() === String(ownerAddr).toLowerCase()
+  );
 
   const fetchPendingSellers = useCallback(async () => {
-    if (!address || !publicClient || !isAdmin) return;
+    if (!address || !publicClient || !isAdmin) {
+      setPendingSellers([]);
+      return;
+    }
     
     setIsEventsLoading(true);
     setLogsError(null);
     try {
-      // Direct contract read: get total count of registration attempts
-      const count = await publicClient.readContract({
-        address,
-        abi: AUCTION_ABI,
-        functionName: 'getRegisteredSellersCount'
+      // Get current block to avoid "latest" incompatibility with some RPCs (like Google)
+      const latestBlock = await publicClient.getBlockNumber();
+      // Use deployment block for Sepolia if on that chain, otherwise 0
+      const fromBlock = chainId === 11155111 ? 10825843n : 0n;
+
+      const logs = await getAllSellerRegisteredLogs({
+        publicClient,
+        contractAddress: address,
+        event: SELLER_REGISTERED_EVENT,
+        fromBlock,
+        toBlock: latestBlock,
       });
 
-      // Fetch all addresses that attempted registration
-      const addrs = await Promise.all(
-        Array.from({ length: Number(count) }, (_, i) => 
-          publicClient.readContract({
-            address,
-            abi: AUCTION_ABI,
-            functionName: 'registeredSellers',
-            args: [BigInt(i)]
-          })
-        )
-      );
-
-      // Deduplicate addresses
-      const uniqueAddrs = [...new Set(addrs)];
+      const uniqueAddrs = [
+        ...new Set(
+          logs
+            .map((log) => log.args?.seller)
+            .filter(Boolean)
+            .map((addr) => String(addr))
+        ),
+      ];
       
-      // Filter for those who are NOT yet verified
       const sellerStatuses = await Promise.all(
         uniqueAddrs.map(async (addr) => {
-          const isVerified = await publicClient.readContract({
-            address,
-            abi: AUCTION_ABI,
-            functionName: 'isVerifiedSeller',
-            args: [addr]
-          });
-          return { addr, isVerified };
+          const [isVerified, sellerData] = await Promise.all([
+            publicClient.readContract({
+              address,
+              abi: AUCTION_ABI,
+              functionName: "isVerifiedSeller",
+              args: [addr],
+            }),
+            publicClient.readContract({
+              address,
+              abi: AUCTION_ABI,
+              functionName: "sellers",
+              args: [addr],
+            }),
+          ]);
+          
+          // Viem v2 returns objects for structs with named properties, arrays otherwise
+          const hasPaidFee = typeof sellerData === 'object' && sellerData !== null && !Array.isArray(sellerData) 
+            ? sellerData.hasPaidFee 
+            : sellerData?.[1];
+            
+          return { addr, isVerified, hasPaidFee };
         })
       );
 
-      setPendingSellers(sellerStatuses.filter(s => !s.isVerified).map(s => s.addr));
+      setPendingSellers(sellerStatuses.filter((s) => s.hasPaidFee && !s.isVerified).map((s) => s.addr));
     } catch (e) {
       console.error("Failed to fetch pending sellers:", e);
       setLogsError("Failed to synchronize curation requests.");
     } finally {
       setIsEventsLoading(false);
     }
-  }, [address, publicClient, isAdmin]);
+  }, [address, publicClient, isAdmin, chainId]);
 
   useEffect(() => {
     fetchPendingSellers();

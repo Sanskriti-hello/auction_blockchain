@@ -63,21 +63,53 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
   const [isActionPending, setIsActionPending] = useState(false);
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
 
+  const auctionEndTime = Number(deadline || 0) * 1000;
+  const isExpired = useMemo(() => {
+    if (!deadline) return false;
+    return Number(deadline) <= now;
+  }, [deadline, now]);
+  const isFinalizable = deadline ? Number(deadline) + 15 <= now : false;
+  const secondsUntilFinalizable = deadline ? Math.max(0, Number(deadline) + 15 - now) : 0;
+  const isActuallyEnded = !!ended;
+  const isFinalizing = !ended && isExpired;
+
+  useEffect(() => {
+    if (isActuallyEnded) {
+      setTimeLeft('Ended');
+      return;
+    }
+
+    if (isFinalizing) {
+      setTimeLeft(isFinalizable ? 'Ready to finalize' : `Finalizable in ${secondsUntilFinalizable}s`);
+      return;
+    }
+
+    const updateTimer = () => {
+      const diff = auctionEndTime - (now * 1000);
+      if (diff <= 0) {
+        setTimeLeft('Ended');
+        return;
+      }
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+      if (days > 0) setTimeLeft(`${days}d ${hours}h`);
+      else if (hours > 0) setTimeLeft(`${hours}h ${minutes}m`);
+      else if (minutes > 0) setTimeLeft(`${minutes}m ${seconds}s`);
+      else setTimeLeft(`${seconds}s`);
+    };
+
+    updateTimer();
+  }, [auctionEndTime, isActuallyEnded, isFinalizing, isFinalizable, secondsUntilFinalizable, now]);
+
   useEffect(() => {
     const interval = setInterval(() => {
       setNow(Math.floor(Date.now() / 1000));
     }, 1000);
     return () => clearInterval(interval);
   }, []);
-
-  const auctionEndTime = Number(deadline || 0) * 1000;
-  
-  const isExpired = useMemo(() => {
-    if (!deadline) return false;
-    return Number(deadline) <= now;
-  }, [deadline, now]);
-
-  const isActuallyEnded = !!(ended || isExpired);
 
   const isSeller = useMemo(() => {
     if (!seller || !address) return false;
@@ -94,8 +126,7 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
   }, [isConnected, isSeller, ended, isExpired]);
 
   const canEnd = useMemo(() => {
-    // Contract has a 15s TIMESTAMP_BUFFER. Wait at least deadline + 16s to be safe.
-    const isBufferedExpired = deadline ? (Number(deadline) + 16 <= now) : false;
+    const isBufferedExpired = deadline ? (Number(deadline) + 15 <= now) : false;
     return !!((isSeller || isAdmin) && !ended && isBufferedExpired);
   }, [isSeller, isAdmin, ended, deadline, now]);
   
@@ -103,9 +134,9 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
   const canWithdraw = useMemo(() => {
     const balance = pendingAmount ?? 0n;
     const hasBalance = balance > 0n;
-    const isLeadingActive = isHighestBidder && !isActuallyEnded;
+    const isLeadingActive = isHighestBidder && !ended;
     return !!(isConnected && hasBalance && !isLeadingActive);
-  }, [isConnected, isHighestBidder, isActuallyEnded, pendingAmount]);
+  }, [isConnected, isHighestBidder, ended, pendingAmount]);
 
   if (!isOpen) return null;
 
@@ -250,12 +281,12 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
                   className="px-4 py-2 rounded-full text-xs font-medium self-start uppercase tracking-widest"
                   style={{
                     background:
-                      !isActuallyEnded ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                    color: !isActuallyEnded ? '#4ade80' : '#f87171',
-                    border: !isActuallyEnded ? '1px solid rgba(34, 197, 94, 0.2)' : '1px solid rgba(239, 68, 68, 0.2)',
+                      isActuallyEnded ? 'rgba(239, 68, 68, 0.15)' : isFinalizing ? 'rgba(245, 158, 11, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                    color: isActuallyEnded ? '#f87171' : isFinalizing ? '#fbbf24' : '#4ade80',
+                    border: isActuallyEnded ? '1px solid rgba(239, 68, 68, 0.2)' : isFinalizing ? '1px solid rgba(245, 158, 11, 0.25)' : '1px solid rgba(34, 197, 94, 0.2)',
                   }}
                 >
-                  {isActuallyEnded ? 'Inactive' : 'Active'}
+                  {isActuallyEnded ? 'Inactive' : isFinalizing ? 'Finalizing' : 'Active'}
                 </div>
               </div>
 
@@ -302,8 +333,12 @@ export function AuctionDetail({ auctionId, isOpen, onClose }: AuctionDetailProps
                     </>
                   ) : (
                     <div className="py-4 flex flex-col items-center justify-center text-center">
-                       {ended || isExpired ? (
-                         <p className="text-red-400/80 font-body text-sm uppercase tracking-widest">Bidding has ended</p>
+                       {ended ? (
+                         <p className="text-red-400/80 font-body text-sm uppercase tracking-widest">Auction finalized</p>
+                       ) : isExpired ? (
+                         <p className="text-amber-300/80 font-body text-sm uppercase tracking-widest">
+                           {isFinalizable ? 'Ready to finalize' : `Bidding closed. Finalizable in ${secondsUntilFinalizable}s`}
+                         </p>
                        ) : isSeller ? (
                          <p className="text-white/40 font-body text-sm">You are the seller of this auction</p>
                        ) : !isConnected ? (

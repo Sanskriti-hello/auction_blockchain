@@ -12,7 +12,6 @@ import {
 
 import { WagmiProvider } from "wagmi";
 import { wagmiConfig } from "./config/wagmi";
-import { AuctionProvider } from "./contexts/AuctionContext";
 import { Web3Provider } from "./contexts/Web3Context";
 import { ThemeProvider } from "./contexts/ThemeContext";
 
@@ -38,9 +37,7 @@ export function Providers({
         >
           <ThemeProvider defaultTheme="dark">
             <Web3Provider>
-              <AuctionProvider>
-                {children}
-              </AuctionProvider>
+              {children}
             </Web3Provider>
           </ThemeProvider>
         </RainbowKitProvider>
