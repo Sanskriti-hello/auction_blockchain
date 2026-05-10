@@ -4,12 +4,12 @@ A production-grade, trustless auction DApp built on Ethereum Sepolia. This platf
 
 ## Team Members
 
-Sanskriti Jain -  240001064  
-Shriya Deo - 240041013  
-Siddhi Patil - 240041035  
-Rida Samrin - 240001060  
-Bhavika Jaiswal - 240001017  
-Disha Dange - 240001026
+1. Sanskriti Jain -  240001064  
+2. Shriya Deo - 240041013  
+3. Siddhi Patil - 240041035  
+4. Rida Samrin - 240001060  
+5. Bhavika Jaiswal - 240001017  
+6. Disha Dange - 240001026
 
 ---
 
@@ -132,9 +132,9 @@ Also reduced overall deployment cost from 1,677,881 → 1,458,793 (saved 219,088
 
 What was changed and why:
 
-Variable packing – The Auction struct originally used 12 storage slots because small types (bool, address) were interspersed with uint256 fields. The EVM fills slots in declaration order, so it could not group small variables together — each wasted the remaining space in its slot and forced a new 20,000-gas SSTORE for the next variable. By reordering the struct and downcasting where safe (e.g. duration to uint32, extensionCount to uint8), multiple fields were packed into the same 32-byte slot. This reduced the struct from 12 slots → 6 slots, halving the number of SSTORE operations per auction creation.  
-calldata instead of memory – Dynamic inputs like string metadataCID were changed from memory to calldata in external functions. memory causes the EVM to copy input data unnecessarily; calldata is read-only and already holds it, removing that copy cost.  
-Custom errors instead of require strings – Long revert strings were replaced with custom errors (e.g. revert BidTooLow()). String messages bloat contract bytecode (raising deployment cost) and cost more gas at runtime when a transaction reverts. Custom errors use a compact 4-byte selector instead.
+**Variable packing** – The Auction struct originally used 12 storage slots because small types (bool, address) were interspersed with uint256 fields. The EVM fills slots in declaration order, so it could not group small variables together — each wasted the remaining space in its slot and forced a new 20,000-gas SSTORE for the next variable. By reordering the struct and downcasting where safe (e.g. duration to uint32, extensionCount to uint8), multiple fields were packed into the same 32-byte slot. This reduced the struct from 12 slots → 6 slots, halving the number of SSTORE operations per auction creation.  
+**calldata instead of memory** – Dynamic inputs like string metadataCID were changed from memory to calldata in external functions. memory causes the EVM to copy input data unnecessarily; calldata is read-only and already holds it, removing that copy cost.  
+**Custom errors instead of require strings** – Long revert strings were replaced with custom errors (e.g. revert BidTooLow()). String messages bloat contract bytecode (raising deployment cost) and cost more gas at runtime when a transaction reverts. Custom errors use a compact 4-byte selector instead.
 
 ---
 
