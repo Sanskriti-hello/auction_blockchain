@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.20;
 
 
 import "forge-std/Test.sol";
@@ -105,4 +105,171 @@ contract AuctionTest is Test {
 
 
     }
+
+
+function test_AdminAndSellerManagement() public {
+    // Already registered seller cannot register again
+    vm.prank(seller);
+    vm.expectRevert(Auction.AlreadyRegistered.selector);
+    auction.registerAsSeller{value: 0.01 ether}();
+
+    // Non-owner cannot verify
+    address newSeller = address(10);
+    vm.deal(newSeller, 1 ether);
+
+    vm.prank(newSeller);
+    auction.registerAsSeller{value: 0.01 ether}();
+
+    vm.prank(bidder1);
+    vm.expectRevert(Auction.NotOwner.selector);
+    auction.verifySeller(newSeller);
+
+    // Owner verifies seller
+    vm.prank(admin);
+    auction.verifySeller(newSeller);
+
+    bool verified = auction.isVerifiedSeller(newSeller);
+    assertEq(verified, true);
+
+    // Revoke seller
+    vm.prank(admin);
+    auction.revokeSeller(newSeller);
+
+    verified = auction.isVerifiedSeller(newSeller);
+    assertEq(verified, false);
+
+    // Revoke again should fail
+    vm.prank(admin);
+    vm.expectRevert(Auction.NotCurrentlyVerified.selector);
+    auction.revokeSeller(newSeller);
 }
+
+function test_AuctionValidationPaths() public {
+    // Zero price
+    vm.prank(seller);
+    vm.expectRevert(Auction.StartingPriceMustBePositive.selector);
+    auction.createAuction("CID", 0, 1 hours, 0.1 ether);
+
+    // Zero increment
+    vm.prank(seller);
+    vm.expectRevert(Auction.IncrementMustBePositive.selector);
+    auction.createAuction("CID", 1 ether, 1 hours, 0);
+
+    // Too short
+    vm.prank(seller);
+    vm.expectRevert(Auction.DurationTooShort.selector);
+    auction.createAuction("CID", 1 ether, 5 minutes, 0.1 ether);
+
+    // Too long
+    vm.prank(seller);
+    vm.expectRevert(Auction.DurationTooLong.selector);
+    auction.createAuction("CID", 1 ether, 2 days, 0.1 ether);
+}
+
+function test_BiddingAndWithdrawFlows() public {
+    uint256 fee = auction.buyerFee(auctionId);
+
+    // Seller cannot bid
+    vm.prank(seller);
+    vm.expectRevert(Auction.SellerCannotBid.selector);
+    auction.placeBid{value: 1 ether + fee}(auctionId);
+
+    // Low bid
+    vm.prank(bidder1);
+    vm.expectRevert(Auction.BidBelowStartingPrice.selector);
+    auction.placeBid{value: 0.5 ether + fee}(auctionId);
+
+    // Valid bid
+    vm.prank(bidder1);
+    auction.placeBid{value: 1 ether + fee}(auctionId);
+
+    // Highest bidder cannot bid again
+    uint256 fee2 = auction.buyerFee(auctionId);
+
+    vm.prank(bidder1);
+    vm.expectRevert(Auction.AlreadyHighestBidder.selector);
+    auction.placeBid{value: 2 ether + fee2}(auctionId);
+
+    // Outbid
+    vm.prank(bidder2);
+    auction.placeBid{value: 1.2 ether + fee2}(auctionId);
+
+    // Winner cannot withdraw
+    vm.prank(bidder2);
+    vm.expectRevert(Auction.CurrentWinnerCannotWithdraw.selector);
+    auction.withdrawBid(auctionId);
+
+    // Loser withdraws
+    vm.prank(bidder1);
+    auction.withdrawBid(auctionId);
+
+    // Double withdraw fails
+    vm.prank(bidder1);
+    vm.expectRevert(Auction.NothingToWithdraw.selector);
+    auction.withdrawBid(auctionId);
+}
+
+function test_ExtensionAndAuctionEndFlows() public {
+    // Non-seller cannot extend
+    vm.prank(bidder1);
+    vm.expectRevert(Auction.OnlySellerCanExtend.selector);
+    auction.extendBySeller(auctionId, 100);
+
+    // Zero extension
+    vm.prank(seller);
+    vm.expectRevert(Auction.ExtensionMustBePositive.selector);
+    auction.extendBySeller(auctionId, 0);
+
+    // Valid extension
+    (, , , , uint256 oldDeadline, , ) = auction.getAuction(auctionId);
+
+    vm.prank(seller);
+    auction.extendBySeller(auctionId, 100);
+
+    (, , , , uint256 newDeadline, , ) = auction.getAuction(auctionId);
+
+    assertEq(newDeadline, oldDeadline + 100);
+
+    // Too early to end
+    vm.expectRevert(Auction.AuctionNotYetEnded.selector);
+    auction.endAuction(auctionId);
+
+    // End after deadline
+    skip(1 hours + 200 seconds);
+
+    auction.endAuction(auctionId);
+
+    // Cannot end twice
+    vm.expectRevert(Auction.AuctionAlreadyFinalized.selector);
+    auction.endAuction(auctionId);
+}
+
+function test_FeesAndViews() public {
+    // Call view functions for coverage
+    auction.timeRemaining(auctionId);
+    auction.minimumBidTotal(auctionId);
+    auction.buyerFee(auctionId);
+    auction.getAuction(auctionId);
+
+    // Update fees
+    vm.prank(admin);
+    auction.updateFees(0.02 ether, 0.002 ether);
+
+    assertEq(auction.sellerRegistrationFee(), 0.02 ether);
+    assertEq(auction.baseBuyerFee(), 0.002 ether);
+
+    // Withdraw fees
+    uint256 beforeBal = admin.balance;
+
+    vm.prank(admin);
+    auction.withdrawFees();
+
+    assertGt(admin.balance, beforeBal);
+
+    // Withdraw again should fail
+    vm.prank(admin);
+    vm.expectRevert(Auction.NoFeesToWithdraw.selector);
+    auction.withdrawFees();
+}
+}
+
