@@ -4,11 +4,11 @@ A production-grade, trustless auction DApp built on Ethereum Sepolia. This platf
 
 ## Team Members
 
-Sanskriti Jain   240001064
-Shriya Deo       240041013
-Siddhi Patil     240041035
-Rida Samrin      240001060
-Bhavika Jaiswal  240001017
+Sanskriti Jain   240001064  
+Shriya Deo       240041013  
+Siddhi Patil     240041035  
+Rida Samrin      240001060  
+Bhavika Jaiswal  240001017  
 Disha Dange      240001026
 
 ---
