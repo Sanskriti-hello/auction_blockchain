@@ -1,6 +1,17 @@
-# CS218 Decentralized Auction Platform
+# Project 5- Decentralized Auction System
 
 A production-grade, trustless auction DApp built on Ethereum Sepolia. This platform features automated anti-snipe protection, IPFS-backed metadata, and a robust seller curation system.
+
+## Team Members
+
+Sanskriti Jain   240001064
+Shriya Deo       240041013
+Siddhi Patil     240041035
+Rida Samrin      240001060
+Bhavika Jaiswal  240001017
+Disha Dange      240001026
+
+---
 
 ## 🚀 Overview
 
@@ -9,6 +20,8 @@ This DApp allows users to:
 - **Create Auctions:** Upload high-value digital assets with names, descriptions, and images stored on IPFS.
 - **Participate in Auctions:** Trustless bidding with automatic 3-minute anti-snipe extensions.
 - **Admin Control:** A dedicated dashboard for the contract owner to verify sellers and withdraw protocol fees.
+
+---
 
 ## 🛠 Tech Stack
 
