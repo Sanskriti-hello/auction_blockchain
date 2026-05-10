@@ -124,10 +124,10 @@ To deploy a fresh version of the contract:
 ---
 
 ## Gas Optimisation
-Function optimised: createAuction
-Before: 236,748 gas
-After: 186,080 gas
-Saved: 50,668 gas (~21% reduction)
+Function optimised: createAuction  
+Before: 236,748 gas  
+After: 186,080 gas  
+Saved: 50,668 gas (~21% reduction)  
 Also reduced overall deployment cost from 1,677,881 → 1,458,793 (saved 219,088 gas).
 
 What was changed and why:
